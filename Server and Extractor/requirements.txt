@@ -1,0 +1,12 @@
+# For running the web services
+fastapi
+uvicorn
+httpx
+
+# For connecting to PostgreSQL
+sqlalchemy
+psycopg2-binary
+
+# For video segmentation
+ffmpeg-python
+minio
