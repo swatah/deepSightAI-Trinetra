@@ -26,7 +26,7 @@ Download the model weights file (`open_clip_pytorch_model.bin`) and place it ins
 Your project structure should look like this:
 
 ```
-your-project/
+Embedder/
 ├── models/
 │   └── open_clip_pytorch_model.bin
 ├── docker-compose.embedder.yaml
@@ -93,3 +93,4 @@ docker-compose -f docker-compose.embedder.yaml up --build
 ## Dependencies
 
 Key Python dependencies include `torch`, `open_clip_torch`, `pymilvus`, and `minio`. All packages are listed in `requirements_embedder.txt` and installed via the `Dockerfile`.
+
