@@ -19,7 +19,7 @@ This service requires you to download the model and include it in the repository
 In the root of your project, create a new folder named `models`.
 
 **2. Download the Model**
-Download the model weights file (`open_clip_pytorch_model.bin`) and place it inside the `models` folder you just created.
+Download the model weights file (`open_clip_pytorch_model.bin`) from the link below and place it inside the `models` folder you just created.
 
 * **Model**: `ViT-B-32`
 
@@ -60,6 +60,16 @@ COPY models/ ./models/
 
 After making these changes, the service is ready to be built and will use the local model file.
 
+### Alternative Models
+
+While `ViT-B-32` is a good default, you can use other OpenCLIP models depending on your needs for speed vs. accuracy.
+
+* **`ViT-L-14`**: A larger, more accurate model. (Embedding Dimension: 768)
+* **`ViT-H-14`**: One of the largest and most accurate models available. (Embedding Dimension: 1024)
+* **`ViT-B-16`**: A model of similar size to the default but with a different patch size, which may offer different performance. (Embedding Dimension: 512)
+
+To use an alternative, you must download the correct model weights, update the model name in `embedder.py`, and crucially, change the `EMBEDDING_DIM` in `docker-compose.embedder.yaml` to match the new model.
+
 ## Services
 
 The system consists of three main services:
@@ -72,15 +82,15 @@ The system consists of three main services:
 
 The service is configured using environment variables in the `docker-compose.embedder.yaml` file.
 
-| Variable             | Description                                  | Default                  |
-| -------------------- | -------------------------------------------- | ------------------------ |
-| `EMBEDDING_DIM`      | The output dimension of the model's vector.  | `"512"`                  |
-| `MILVUS_HOST`        | Hostname of the Milvus service.              | `milvus-standalone`      |
-| `MILVUS_PORT`        | Port for the Milvus service.                 | `19530`                  |
-| `MINIO_URL`          | URL for the MinIO server.                    | `host.docker.internal:9000` |
-| `FRAME_BUCKET`       | The MinIO bucket to scan for video frames.   | `frames`                 |
-| `FILES_PER_EMBED_BATCH`| Number of frames to process at once.         | `32`                     |
-| `INSERT_BATCH_SIZE`  | Number of embeddings to batch before inserting into Milvus. | `500`                    |
+| Variable                | Description                                                 | Default                     |
+| ----------------------- | ----------------------------------------------------------- | --------------------------- |
+| `EMBEDDING_DIM`         | The output dimension of the model's vector.                 | `"512"`                     |
+| `MILVUS_HOST`           | Hostname of the Milvus service.                             | `milvus-standalone`         |
+| `MILVUS_PORT`           | Port for the Milvus service.                                | `19530`                     |
+| `MINIO_URL`             | URL for the MinIO server.                                   | `host.docker.internal:9000` |
+| `FRAME_BUCKET`          | The MinIO bucket to scan for video frames.                  | `frames`                    |
+| `FILES_PER_EMBED_BATCH` | Number of frames to process at once.                        | `32`                        |
+| `INSERT_BATCH_SIZE`     | Number of embeddings to batch before inserting into Milvus. | `500`                       |
 
 ## Usage
 
@@ -93,4 +103,3 @@ docker-compose -f docker-compose.embedder.yaml up --build
 ## Dependencies
 
 Key Python dependencies include `torch`, `open_clip_torch`, `pymilvus`, and `minio`. All packages are listed in `requirements_embedder.txt` and installed via the `Dockerfile`.
-
