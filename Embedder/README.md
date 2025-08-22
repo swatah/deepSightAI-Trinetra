@@ -14,12 +14,35 @@ The system runs as a set of containerized services managed by Docker Compose.
 
 4. **Mark**: Once a segment or bucket is fully processed, it's marked with a `.processed` file to prevent re-processing. If no new frames are found, the service waits briefly before scanning again.
 
-## Model Details
+## Model Setup
 
-This service uses the **OpenCLIP ViT-B-32** model, pretrained on the `laion2b_s34b_b79k` dataset.
+This service uses the **OpenCLIP ViT-B-32** model, pretrained on the `laion2b_s34b_b79k` dataset. To ensure the service works correctly in all environments, the model file must be included in the repository.
 
-- **Automatic Download**: By default, you do not need to download the model manually. The `open_clip_torch` library automatically downloads and caches the model the first time the service runs.
-- **Embedding Size**: The model generates a `512`-dimensional vector embedding for each video frame.
+**1. Download the Model**
+Create a new folder named `models` in your project directory. Download the model weights file (`open_clip_pytorch_model.bin`) from [this link](https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K/resolve/main/open_clip_pytorch_model.bin) and place it inside the `models` folder.
+
+**2. Modify `embedder.py`**
+In `embedder.py`, find the line where the model is created and change it to point to the local file path:
+```python
+# Find this line:
+model, _, preprocess = open_clip.create_model_and_transforms(
+    "ViT-B-32", pretrained="laion2b_s34b_b79k"
+)
+
+# And change it to this:
+model, _, preprocess = open_clip.create_model_and_transforms(
+    "ViT-B-32", pretrained="models/open_clip_pytorch_model.bin"
+)
+```
+
+**3. Update the `Dockerfile`**
+Add a line to your `Dockerfile` to copy the `models` folder into the Docker image.
+```dockerfile
+# Add this line before the "COPY embedder.py ." line
+COPY models/ ./models/
+```
+
+After making these changes, the service will use the local model file.
 
 ## Services
 
@@ -54,8 +77,6 @@ docker-compose -f docker-compose.embedder.yaml up --build
 ```
 
 The `embedder` will then automatically start processing frames from the configured MinIO instance.
-
-After making these changes, rebuild your Docker image (`docker-compose -f docker-compose.embedder.yaml up --build`), and it will use the local model file instead of trying to download it.
 
 ## Dependencies
 
