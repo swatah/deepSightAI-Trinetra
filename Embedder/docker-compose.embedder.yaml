@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # These services (etcd, milvus-standalone) are required to run Milvus.
+  # MinIO is provided by the extractor server.
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_HEARTBEAT_INTERVAL=500
+      - ETCD_ELECTION_TIMEOUT=2500
+    volumes:
+      # Use a named volume for etcd data for better portability.
+      - etcd:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    networks:
+      - embedder-net
+
+  milvus-standalone:
+    image: milvusdb/milvus:v2.4.4
+    platform: linux/amd64
+    command: ["/milvus/bin/milvus", "run", "standalone"]
+    environment:
+      - ETCD_ENDPOINTS=etcd:2379
+      # Connect to external MinIO (from extractor server)
+      - MINIO_ADDRESS=host.docker.internal:9000
+    volumes:
+      # Use a named volume for Milvus data.
+      - milvus:/var/lib/milvus
+    ports:
+      - "19530:19530" # Milvus SDK port
+      - "9091:9091"   # Milvus health check/API port
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    depends_on:
+      etcd:
+        condition: service_started
+    networks:
+      - embedder-net
+
+  # Connects to extractor's MinIO for frame data
+  embedder:
+    # Build the embedder image from current directory
+    build:
+      context: .
+    # Always restart the container if it stops, for resilience.
+    restart: always
+    # Wait for Milvus to be healthy before starting
+    depends_on:
+      milvus-standalone:
+        condition: service_healthy
+    environment:
+      # Milvus connection settings (internal)
+      - MILVUS_HOST=milvus-standalone
+      - MILVUS_PORT=19530
+      # MinIO connection settings (external - from extractor server)
+      - MINIO_URL=host.docker.internal:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - FRAME_BUCKET=frames
+      # Processing settings
+      - FILES_PER_EMBED_BATCH=32
+      - INSERT_BATCH_SIZE=500
+      - SLEEP_NO_WORK_SECONDS=10
+      - SLEEP_ON_ERROR_SECONDS=30
+      - LOG_LEVEL=INFO
+    networks:
+      - embedder-net
+
+
+# Defines the embedder network
+networks:
+  embedder-net:
+
+# Defines the named volumes for persistent data storage
+volumes:
+  etcd:
+  milvus:
