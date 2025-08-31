@@ -11,6 +11,9 @@ COPY requirements_embedder.txt .
 # Install the Python packages.
 RUN pip install --no-cache-dir -r requirements_embedder.txt
 
+# Copy the models directory (including ONNX model)
+COPY models/ ./models/
+
 # Copy the embedder script into the container.
 COPY embedder.py .
 

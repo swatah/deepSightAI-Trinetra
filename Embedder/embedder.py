@@ -3,9 +3,11 @@ import time
 import logging
 import tempfile
 from typing import List
+import numpy as np
 
 import torch
 import open_clip
+import onnxruntime as ort
 from PIL import Image
 from minio import Minio
 from minio.error import S3Error
@@ -40,6 +42,10 @@ INSERT_BATCH_SIZE = int(os.getenv("INSERT_BATCH_SIZE", "1000"))
 SLEEP_NO_WORK_SECONDS = int(os.getenv("SLEEP_NO_WORK_SECONDS", "10"))
 SLEEP_ON_ERROR_SECONDS = int(os.getenv("SLEEP_ON_ERROR_SECONDS", "30"))
 
+# ONNX Configuration
+USE_ONNX = os.getenv("USE_ONNX", "1") == "1"
+ONNX_MODEL_PATH = os.getenv("ONNX_MODEL_PATH", "models/open_clip_vit_b32.onnx")
+
 PIN_MEMORY = os.getenv("PIN_MEMORY", "1") == "1" and torch.cuda.is_available()
 USE_AUTOCast = torch.cuda.is_available() 
 
@@ -49,18 +55,82 @@ logging.basicConfig(
 )
 logger = logging.getLogger("embedder")
 
-
-# loading OpenCLIP model
-logger.info("Loading OpenCLIP model ViT-B-32 (laion2b_s34b_b79k)...")
-model, _, preprocess = open_clip.create_model_and_transforms(
-    "ViT-B-32", pretrained="laion2b_s34b_b79k"
-)
-model.eval()
-
-# use gpu if available as cuda is faster for embedding
+# Global variables for model and preprocessing
+model = None
+preprocess = None
+onnx_session = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model.to(device)
-logger.info(f"Model loaded on device: {device}")
+
+def auto_export_onnx_model():
+    """Automatically export PyTorch model to ONNX if it doesn't exist."""
+    logger.info(f"ONNX model not found at {ONNX_MODEL_PATH}. Auto-exporting...")
+    
+    # Create models directory if it doesn't exist
+    os.makedirs(os.path.dirname(ONNX_MODEL_PATH), exist_ok=True)
+    
+    # Load PyTorch model for export
+    temp_model, _, _ = open_clip.create_model_and_transforms(
+        "ViT-B-32", pretrained="laion2b_s34b_b79k"
+    )
+    temp_model.eval()
+    
+    # Create dummy input
+    dummy_input = torch.randn(1, 3, 224, 224)
+    
+    # Export to ONNX
+    torch.onnx.export(
+        temp_model.visual,  # Only export the vision part
+        dummy_input,
+        ONNX_MODEL_PATH,
+        export_params=True,
+        opset_version=11,
+        do_constant_folding=True,
+        input_names=['input'],
+        output_names=['output'],
+        dynamic_axes={
+            'input': {0: 'batch_size'},
+            'output': {0: 'batch_size'}
+        }
+    )
+    
+    logger.info(f"✅ ONNX model auto-exported to {ONNX_MODEL_PATH}")
+    
+    # Clean up temporary model
+    del temp_model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+# Load model (ONNX or PyTorch)
+if USE_ONNX:
+    # Check if ONNX model exists, if not auto-export it
+    if not os.path.exists(ONNX_MODEL_PATH):
+        auto_export_onnx_model()
+    
+    logger.info(f"Loading ONNX model from {ONNX_MODEL_PATH}...")
+    
+    # Set up ONNX Runtime providers
+    if torch.cuda.is_available():
+        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        logger.info("ONNX using GPU acceleration")
+    else:
+        providers = ['CPUExecutionProvider']
+        logger.info("ONNX using CPU")
+    
+    # Create ONNX session
+    onnx_session = ort.InferenceSession(ONNX_MODEL_PATH, providers=providers)
+    
+    # We still need the preprocessing function from open_clip
+    _, _, preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained="laion2b_s34b_b79k")
+    
+    logger.info("✅ ONNX model loaded successfully")
+else:
+    logger.info("Loading PyTorch OpenCLIP model ViT-B-32 (laion2b_s34b_b79k)...")
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        "ViT-B-32", pretrained="laion2b_s34b_b79k"
+    )
+    model.eval()
+    model.to(device)
+    logger.info(f"PyTorch model loaded on device: {device}")
 
 def get_milvus_collection() -> Collection:
     """Connect to Milvus and return the collection, creating it + index if missing."""
@@ -302,6 +372,7 @@ def delete_rtsp_frame_objects(minio_client: Minio, bucket_name: str, frame_objec
 
 @torch.no_grad()
 #Normalize and encode images using OpenCLIP
+@torch.no_grad()
 def encode_images(paths: List[str]) -> torch.Tensor:
     """Encode a list of image paths into a tensor of normalized CLIP features (N, D)."""
     tensors: List[torch.Tensor] = []
@@ -316,19 +387,37 @@ def encode_images(paths: List[str]) -> torch.Tensor:
             logger.error(f"Failed to load/preprocess image '{p}': {e}")
 
     if not tensors:
-        return torch.empty((0, EMBEDDING_DIM), dtype=torch.float32, device=device)
+        if USE_ONNX and onnx_session:
+            return torch.empty((0, EMBEDDING_DIM), dtype=torch.float32)
+        else:
+            return torch.empty((0, EMBEDDING_DIM), dtype=torch.float32, device=device)
 
     batch = torch.stack(tensors, dim=0)
-    batch = batch.to(device, non_blocking=True)
-#Use autocast to optimize performance if available
-    if USE_AUTOCast:
-        with torch.autocast("cuda"):
-            feats = model.encode_image(batch)
-    else:
-        feats = model.encode_image(batch)
 
-    feats = feats / feats.norm(dim=-1, keepdim=True)
-    return feats.float()
+    if USE_ONNX and onnx_session:
+        # ONNX inference path
+        logger.debug(f"Processing {batch.shape[0]} images with ONNX")
+        batch_np = batch.numpy()
+        onnx_inputs = {onnx_session.get_inputs()[0].name: batch_np}
+        onnx_output = onnx_session.run(None, onnx_inputs)[0]
+        
+        # Convert back to PyTorch tensor and normalize
+        feats = torch.from_numpy(onnx_output).float()
+        feats = feats / feats.norm(dim=-1, keepdim=True)
+        return feats
+    else:
+        # PyTorch inference path
+        logger.debug(f"Processing {batch.shape[0]} images with PyTorch")
+        batch = batch.to(device, non_blocking=True)
+        
+        if USE_AUTOCast:
+            with torch.autocast("cuda"):
+                feats = model.encode_image(batch)
+        else:
+            feats = model.encode_image(batch)
+
+        feats = feats / feats.norm(dim=-1, keepdim=True)
+        return feats.float()
 
 
 #Main processing loop to read frames from MinIO, encode, and insert into Milvus

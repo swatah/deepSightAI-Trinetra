@@ -64,6 +64,9 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - FRAME_BUCKET=frames
+      # ONNX Configuration
+      - USE_ONNX=1
+      - ONNX_MODEL_PATH=models/open_clip_vit_b32.onnx
       # Processing settings
       - FILES_PER_EMBED_BATCH=32
       - INSERT_BATCH_SIZE=500
