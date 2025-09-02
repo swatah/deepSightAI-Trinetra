@@ -2,60 +2,71 @@
 
 This service automatically scans for video frames in a MinIO bucket, generates vector embeddings for each frame using a bundled OpenCLIP model, and stores them in a Milvus vector database. This enables efficient similarity searching on video content.
 
-The system runs as a set of containerized services managed by Docker Compose.
-
+The system runs as a set of containerized services managed by Docker Compose. The vision encoder can be exported to ONNX format for optimized inference or integration.
 ## How It Works
 
 1.  **Scan**: The service continuously scans MinIO buckets (`frames` and `frames-rtsp-*`) for new, unprocessed video segments or RTSP frame buckets.
 2.  **Embed**: It downloads batches of frames and uses the bundled OpenCLIP model to generate vector embeddings, using a GPU if available.
 3.  **Store**: The embeddings and their metadata (video ID, frame path) are inserted into a Milvus collection.
 4.  **Mark**: Once a segment or bucket is fully processed, it's marked with a `.processed` file to prevent re-processing. If no new frames are found, the service waits briefly before scanning again.
+5.  **Delete**: After embedding and storing, frames are automatically deleted from the bucket to save storage and keep the system efficient.
 
 ## Model Setup
 
-This service requires you to download the model and include it in the repository to ensure it is self-contained and works in any environment.
+This service requires you to download the model and include it in the repository to ensure it is self-contained and works in any environment. You can also export the vision encoder to ONNX format for faster inference or deployment in other environments.
 
 **1. Create the `models` Folder**
 In the root of your project, create a new folder named `models`.
 
 **2. Download the Model**
-Download the model weights file (`open_clip_pytorch_model.bin`) from the link below and place it inside the `models` folder you just created.
+
+Download the model weights file (`open_clip_pytorch_model.bin`) from the link below and place it inside the `models` folder you just created. When you start the container, it will automatically check for and export the vision encoder to ONNX format if the ONNX model doesn't already exist.
 
 * **Model**: `ViT-B-32`
 
+The container startup process will:
+- Check if `models/open_clip_vit_b32.onnx` exists
+- If not, look for `models/open_clip_pytorch_model.bin` and export it to ONNX
+- Use the available model format (ONNX preferred for performance, PyTorch as fallback)
+- Start the embedder service
+
 Your project structure should look like this:
+
 
 ```
 Embedder/
 ├── models/
-│   └── open_clip_pytorch_model.bin
+│   ├── open_clip_pytorch_model.bin
+│   └── open_clip_vit_b32.onnx (auto-generated)
 ├── docker-compose.embedder.yaml
 ├── Dockerfile
 ├── embedder.py
+├── export_to_onnx.py
+├── start.sh
 └── requirements_embedder.txt
 ```
 
-**3. Modify `embedder.py`**
-In `embedder.py`, find the line where the model is created and change it to point to the local file path:
+**3. Model Loading (Automatic)**
 
-```python
-# Find this line:
-model, _, preprocess = open_clip.create_model_and_transforms(
-    "ViT-B-32", pretrained="laion2b_s34b_b79k"
-)
+The `embedder.py` automatically detects and uses local model files:
 
-# And change it to this:
-model, _, preprocess = open_clip.create_model_and_transforms(
-    "ViT-B-32", pretrained="models/open_clip_pytorch_model.bin"
-)
-```
+- If `models/open_clip_pytorch_model.bin` exists, it will use the local PyTorch model
+- If `models/open_clip_vit_b32.onnx` exists, it will preferentially use the ONNX model for faster inference  
+- If no local models exist, it will download the pretrained model (`laion2b_s34b_b79k`) on first run
+
+No manual code modification is required - the system automatically chooses the best available model format.
 
 **4. Update the `Dockerfile`**
-Add a line to your `Dockerfile` to copy the `models` folder into the Docker image. This line should be added before the line that copies `embedder.py`.
+
+The `Dockerfile` has been updated to include a startup script (`start.sh`) that automatically:
+1. Checks if an ONNX model exists
+2. If not, exports the PyTorch model to ONNX format (if available)
+3. Starts the embedder service
 
 ```dockerfile
-# Add this line before "COPY embedder.py ."
-COPY models/ ./models/
+# The startup script and export script are copied automatically
+COPY start.sh .
+COPY export_to_onnx.py .
 ```
 
 After making these changes, the service is ready to be built and will use the local model file.
@@ -91,6 +102,7 @@ The service is configured using environment variables in the `docker-compose.emb
 | `FRAME_BUCKET`          | The MinIO bucket to scan for video frames.                  | `frames`                    |
 | `FILES_PER_EMBED_BATCH` | Number of frames to process at once.                        | `32`                        |
 | `INSERT_BATCH_SIZE`     | Number of embeddings to batch before inserting into Milvus. | `500`                       |
+| `USE_ONNX`              | Whether to use ONNX model for inference if available.       | `"1"` (enabled)             |
 
 ## Usage
 
@@ -100,6 +112,29 @@ With Docker and Docker Compose installed, run the following command from the pro
 docker-compose -f docker-compose.embedder.yaml up --build
 ```
 
+The container will automatically:
+1. Check for existing ONNX model (`models/open_clip_vit_b32.onnx`)
+2. If not found, attempt to export from PyTorch model (`models/open_clip_pytorch_model.bin`)
+3. Start the embedder service with the best available model format
+
+**Manual ONNX Export** (Optional):
+To manually export the ONNX model before running the container:
+
+```bash
+python export_to_onnx.py
+```
+
+The startup script will skip the export step if the ONNX model already exists.
+
 ## Dependencies
 
-Key Python dependencies include `torch`, `open_clip_torch`, `pymilvus`, and `minio`. All packages are listed in `requirements_embedder.txt` and installed via the `Dockerfile`.
+
+Key Python dependencies include:
+- `torch`
+- `open_clip_torch`
+- `pymilvus`
+- `minio`
+- `onnx` (for exporting models)
+- `onnxruntime-gpu` (for ONNX inference)
+
+All packages are listed in `requirements_embedder.txt` and installed via the `Dockerfile`.

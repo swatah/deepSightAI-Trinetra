@@ -26,7 +26,7 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 
 #Milvus collection details
 COLLECTION_NAME = os.getenv("MILVUS_COLLECTION", "video_frames")
-EMBEDDING_DIM = 512  # ViT-B-32 embedding size
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "512"))  # ViT-B-32 embedding size
 
 #MinIO variables
 MINIO_URL = os.getenv("MINIO_URL", "localhost:9000")
@@ -61,51 +61,8 @@ preprocess = None
 onnx_session = None
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def auto_export_onnx_model():
-    """Automatically export PyTorch model to ONNX if it doesn't exist."""
-    logger.info(f"ONNX model not found at {ONNX_MODEL_PATH}. Auto-exporting...")
-    
-    # Create models directory if it doesn't exist
-    os.makedirs(os.path.dirname(ONNX_MODEL_PATH), exist_ok=True)
-    
-    # Load PyTorch model for export
-    temp_model, _, _ = open_clip.create_model_and_transforms(
-        "ViT-B-32", pretrained="laion2b_s34b_b79k"
-    )
-    temp_model.eval()
-    
-    # Create dummy input
-    dummy_input = torch.randn(1, 3, 224, 224)
-    
-    # Export to ONNX
-    torch.onnx.export(
-        temp_model.visual,  # Only export the vision part
-        dummy_input,
-        ONNX_MODEL_PATH,
-        export_params=True,
-        opset_version=11,
-        do_constant_folding=True,
-        input_names=['input'],
-        output_names=['output'],
-        dynamic_axes={
-            'input': {0: 'batch_size'},
-            'output': {0: 'batch_size'}
-        }
-    )
-    
-    logger.info(f"✅ ONNX model auto-exported to {ONNX_MODEL_PATH}")
-    
-    # Clean up temporary model
-    del temp_model
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
 # Load model (ONNX or PyTorch)
-if USE_ONNX:
-    # Check if ONNX model exists, if not auto-export it
-    if not os.path.exists(ONNX_MODEL_PATH):
-        auto_export_onnx_model()
-    
+if USE_ONNX and os.path.exists(ONNX_MODEL_PATH):
     logger.info(f"Loading ONNX model from {ONNX_MODEL_PATH}...")
     
     # Set up ONNX Runtime providers
@@ -116,18 +73,33 @@ if USE_ONNX:
         providers = ['CPUExecutionProvider']
         logger.info("ONNX using CPU")
     
-    # Create ONNX session
-    onnx_session = ort.InferenceSession(ONNX_MODEL_PATH, providers=providers)
-    
-    # We still need the preprocessing function from open_clip
-    _, _, preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained="laion2b_s34b_b79k")
-    
-    logger.info("✅ ONNX model loaded successfully")
-else:
-    logger.info("Loading PyTorch OpenCLIP model ViT-B-32 (laion2b_s34b_b79k)...")
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        "ViT-B-32", pretrained="laion2b_s34b_b79k"
-    )
+    try:
+        # Create ONNX session
+        onnx_session = ort.InferenceSession(ONNX_MODEL_PATH, providers=providers)
+        
+        # Get preprocessing transforms without loading the full model
+        _, _, preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained=None)
+        
+        logger.info("✅ ONNX model loaded successfully")
+    except Exception as e:
+        logger.error(f"Failed to load ONNX model: {e}")
+        logger.info("Falling back to PyTorch model...")
+        USE_ONNX = False
+        onnx_session = None
+
+if not USE_ONNX or not os.path.exists(ONNX_MODEL_PATH):
+    logger.info("Loading PyTorch OpenCLIP model ViT-B-32...")
+    local_pytorch_model = "models/open_clip_pytorch_model.bin"
+    if os.path.exists(local_pytorch_model):
+        logger.info(f"Using local PyTorch model: {local_pytorch_model}")
+        model, _, preprocess = open_clip.create_model_and_transforms(
+            "ViT-B-32", pretrained=local_pytorch_model
+        )
+    else:
+        logger.info("Using online pretrained model: laion2b_s34b_b79k")
+        model, _, preprocess = open_clip.create_model_and_transforms(
+            "ViT-B-32", pretrained="laion2b_s34b_b79k"
+        )
     model.eval()
     model.to(device)
     logger.info(f"PyTorch model loaded on device: {device}")
@@ -553,7 +525,7 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
             # Don't delete frames if insertion failed
             return
 
-    # Delete all successfully processed frames to save space
+    # Always delete successfully processed frames to save space
     if processed_frames:
         logger.info(f"Deleting {len(processed_frames)} processed frames from {segment_prefix}")
         delete_frame_objects(minio_client, processed_frames)
@@ -638,7 +610,7 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
             # Don't delete frames if insertion failed
             return
 
-    # Delete all successfully processed frames to save space
+    # Always delete successfully processed frames to save space
     if processed_frames:
         logger.info(f"Deleting {len(processed_frames)} processed frames from RTSP bucket {bucket_name}")
         delete_rtsp_frame_objects(minio_client, bucket_name, processed_frames)

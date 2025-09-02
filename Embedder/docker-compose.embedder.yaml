@@ -59,6 +59,8 @@ services:
       # Milvus connection settings (internal)
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
+      # Model configuration
+      - EMBEDDING_DIM=512
       # MinIO connection settings (external - from extractor server)
       - MINIO_URL=host.docker.internal:9000
       - MINIO_ACCESS_KEY=minioadmin

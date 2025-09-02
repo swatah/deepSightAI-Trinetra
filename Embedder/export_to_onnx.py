@@ -4,8 +4,18 @@ import os
 
 def export_model():
     print("Loading OpenCLIP model...")
+    
+    # Check if local PyTorch model exists, otherwise use pretrained
+    local_pytorch_model = "models/open_clip_pytorch_model.bin"
+    if os.path.exists(local_pytorch_model):
+        print(f"Using local PyTorch model: {local_pytorch_model}")
+        pretrained_source = local_pytorch_model
+    else:
+        print("Using online pretrained model: laion2b_s34b_b79k")
+        pretrained_source = "laion2b_s34b_b79k"
+    
     model, _, preprocess = open_clip.create_model_and_transforms(
-        "ViT-B-32", pretrained="laion2b_s34b_b79k"
+        "ViT-B-32", pretrained=pretrained_source
     )
     model.eval()
     
