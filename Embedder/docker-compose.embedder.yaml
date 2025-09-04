@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # These services (etcd, milvus-standalone) are required to run Milvus.
   # MinIO is provided by the extractor server.
@@ -20,13 +18,15 @@ services:
       - embedder-net
 
   milvus-standalone:
-    image: milvusdb/milvus:v2.4.4
+    image: milvusdb/milvus:v2.4.0
     platform: linux/amd64
     command: ["/milvus/bin/milvus", "run", "standalone"]
     environment:
       - ETCD_ENDPOINTS=etcd:2379
       # Connect to external MinIO (from extractor server)
       - MINIO_ADDRESS=host.docker.internal:9000
+      # Milvus stability settings
+      - COMMON_STORAGETYPE=local
     volumes:
       # Use a named volume for Milvus data.
       - milvus:/var/lib/milvus
