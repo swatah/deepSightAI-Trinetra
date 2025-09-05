@@ -7,6 +7,7 @@ from minio.error import S3Error
 from PIL import Image
 import io
 import base64
+import uuid
 
 # Check if PySceneDetect is installed
 try:
@@ -140,8 +141,8 @@ def get_timestamp_from_path(frame_path):
     """Parses frame path to estimate the timestamp in MM:SS format."""
     try:
         parts = frame_path.split('/')
-        if len(parts) == 3 and parts[1].startswith('segment_'):
-            segment_part, frame_part = parts[1], parts[2]
+        if len(parts) >= 3 and parts[-2].startswith('segment_'):
+            segment_part, frame_part = parts[-2], parts[-1]
             # Assumes segment_duration is 30s from main_api.py
             segment_duration = 30
             segment_num = int(segment_part.split('_')[1])
@@ -184,16 +185,20 @@ if st.sidebar.button("Run Search", use_container_width=True):
     # Action 1: Handle Video File Upload
     if video_file:
         try:
+            # Create a unique filename to prevent overwrites
+            unique_filename = f"{uuid.uuid4()}-{video_file.name}"
+            
             with st.spinner(f"Uploading '{video_file.name}'..."):
                 minio_client = Minio(MINIO_URL, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=False)
                 if not minio_client.bucket_exists(VIDEO_BUCKET):
                     minio_client.make_bucket(VIDEO_BUCKET)
                 video_file.seek(0)
-                minio_client.put_object(VIDEO_BUCKET, video_file.name, video_file, length=video_file.getbuffer().nbytes, content_type='video/mp4')
+                minio_client.put_object(VIDEO_BUCKET, unique_filename, video_file, length=video_file.getbuffer().nbytes, content_type='video/mp4')
             st.success("Video received.")
 
             with st.spinner("Notifying server to process video..."):
-                response = requests.post(f"{API_URL}/process_video", json={"video_uri": video_file.name})
+                # Send the unique filename to the backend
+                response = requests.post(f"{API_URL}/process_video", json={"video_uri": unique_filename})
                 if response.status_code == 200:
                     st.success("Server processing started.")
                 else:
