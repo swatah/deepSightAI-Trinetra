@@ -3,9 +3,8 @@ fastapi
 uvicorn
 httpx
 
-# For connecting to PostgreSQL
-sqlalchemy
-psycopg2-binary
+# For connecting to Redis
+redis
 
 # For video segmentation
 ffmpeg-python

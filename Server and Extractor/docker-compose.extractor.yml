@@ -1,10 +1,12 @@
 services:
-  db:
-    image: postgres:15
+  redis:
+    image: redis:7-alpine
     restart: always
-    environment: { POSTGRES_USER: admin, POSTGRES_PASSWORD: secret, POSTGRES_DB: registry_db }
-    volumes: [ "./volumes/postgres_data:/var/lib/postgresql/data/" ]
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U admin -d registry_db"], interval: 5s, timeout: 5s, retries: 5 }
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks: [ video-net ]
 
   minio:
@@ -22,8 +24,8 @@ services:
     build: .
     command: uvicorn registry:app --host 0.0.0.0 --port 8000
     restart: always
-    environment: { DATABASE_URL: "postgresql://admin:secret@db:5432/registry_db" }
-    depends_on: { db: { condition: service_healthy } }
+    environment: { REDIS_URL: "redis://redis:6379" }
+    depends_on: { redis: { condition: service_healthy } }
     healthcheck: { test: ["CMD", "curl", "-f", "http://localhost:8000/health"], interval: 5s, timeout: 3s, retries: 10 }
     networks: [ video-net ]
 
@@ -33,16 +35,15 @@ services:
     restart: always
     ports: [ "8080:8080" ]
     depends_on: { registry: { condition: service_healthy } }
-    volumes: [ "./videos:/app/videos" ] # For video input
     networks: [ video-net ]
 
-  extractor-1:
+  extractor-1: &extractor-template
     build: .
     command: uvicorn extractor:app --host 0.0.0.0 --port 8001
     restart: always
     environment:
       - REGISTRY_URL=http://registry:8000
-      - MINIO_URL=http://minio:9000 # Connects to the MinIO service
+      - MINIO_URL=http://minio:9000
       - EXTRACTOR_ID=extractor-1
       - EXTRACTOR_URL=http://extractor-1:8001
       - PYTHONPATH=/usr/lib/python3/dist-packages
@@ -50,34 +51,27 @@ services:
     networks: [ video-net ]
   
   extractor-2:
-    build: .
+    <<: *extractor-template
     command: uvicorn extractor:app --host 0.0.0.0 --port 8002
-    restart: always
     environment:
       - REGISTRY_URL=http://registry:8000
       - MINIO_URL=http://minio:9000
       - EXTRACTOR_ID=extractor-2
       - EXTRACTOR_URL=http://extractor-2:8002
       - PYTHONPATH=/usr/lib/python3/dist-packages
-    depends_on: { registry: { condition: service_healthy }, minio: { condition: service_healthy } }
-    networks: [ video-net ]
 
   extractor-3:
-    build: .
+    <<: *extractor-template
     command: uvicorn extractor:app --host 0.0.0.0 --port 8003
-    restart: always
     environment:
       - REGISTRY_URL=http://registry:8000
       - MINIO_URL=http://minio:9000
       - EXTRACTOR_ID=extractor-3
       - EXTRACTOR_URL=http://extractor-3:8003
       - PYTHONPATH=/usr/lib/python3/dist-packages
-    depends_on: { registry: { condition: service_healthy }, minio: { condition: service_healthy } }
-    networks: [ video-net ]
+
 networks:
   video-net:
 
 volumes:
-  postgres_data:
   minio:
-  

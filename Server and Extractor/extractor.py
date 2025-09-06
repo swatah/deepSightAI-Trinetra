@@ -178,10 +178,11 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
             extractor = GStreamerFileExtractor()
             extractor.extract_frames(temp_segment_path, frames_output_dir)
             video_basename = os.path.splitext(video_uri)[0]
-            for frame_file in os.listdir(frames_output_dir):
+            for frame_file in sorted(os.listdir(frames_output_dir)): # Sort frames before uploading
                 if frame_file.endswith(".jpg"):
                     local_frame_path = os.path.join(frames_output_dir, frame_file)
-                    minio_object_name = f"{video_basename}/segment_{segment_id:03d}/{frame_file}"
+                    # New naming convention: video/segment_id/frame_name
+                    minio_object_name = f"{video_basename}/segment_{segment_id:04d}/{frame_file}"
                     minio_client.fput_object(FRAME_BUCKET, minio_object_name, local_frame_path)
             print(f"[{EXTRACTOR_ID}] Finished segment {segment_id} and uploaded frames to MinIO.")
         except Exception:

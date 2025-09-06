@@ -1,77 +1,59 @@
 import os
 import uvicorn
-from fastapi import FastAPI, HTTPException, Depends
+import redis
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Integer
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.ext.declarative import declarative_base
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:secret@localhost/registry_db")
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-class ExtractorModel(Base):
-    __tablename__ = "extractors"
-    id = Column(Integer, primary_key=True, index=True)
-    extractor_id = Column(String, unique=True, index=True, nullable=False)
-    extractor_url = Column(String, nullable=False)
-    status = Column(String, default="available", nullable=False)
+# Connect to Redis using the service name from docker-compose
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 class ExtractorRegister(BaseModel):
     extractor_id: str
     extractor_url: str
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-app = FastAPI(title="Central Registry (PostgreSQL)")
-
-@app.on_event("startup")
-def on_startup():
-    Base.metadata.create_all(bind=engine)
+app = FastAPI(title="Central Registry (Redis)")
 
 @app.post("/register")
-def register_extractor(extractor: ExtractorRegister, db: Session = Depends(get_db)):
-    db_extractor = db.query(ExtractorModel).filter(ExtractorModel.extractor_id == extractor.extractor_id).first()
-    if db_extractor:
-        db_extractor.extractor_url = extractor.extractor_url
-        db_extractor.status = "available"
-    else:
-        db_extractor = ExtractorModel(**extractor.dict(), status="available")
-        db.add(db_extractor)
-    db.commit()
-    db.refresh(db_extractor)
-    return {"message": f"Extractor {db_extractor.extractor_id} registered."}
+def register_extractor(extractor: ExtractorRegister):
+    """Registers or updates an extractor's info and sets its status to available."""
+    extractor_key = f"extractor:{extractor.extractor_id}"
+    # Store extractor info in a Redis Hash
+    r.hset(extractor_key, mapping={
+        "extractor_id": extractor.extractor_id,
+        "extractor_url": extractor.extractor_url,
+        "status": "available"
+    })
+    return {"message": f"Extractor {extractor.extractor_id} registered."}
 
 @app.post("/update_status")
-def update_extractor_status(extractor_id: str, status: str, db: Session = Depends(get_db)):
-    db_extractor = db.query(ExtractorModel).filter(ExtractorModel.extractor_id == extractor_id).first()
-    if not db_extractor:
+def update_extractor_status(extractor_id: str, status: str):
+    """Updates the status of a given extractor."""
+    extractor_key = f"extractor:{extractor_id}"
+    if not r.exists(extractor_key):
         raise HTTPException(status_code=404, detail="Extractor not found")
-    db_extractor.status = status
-    db.commit()
+    
+    # Update the status field in the Hash
+    r.hset(extractor_key, "status", status)
     return {"message": "Status updated"}
 
 @app.get("/get_available_extractor")
-def get_available_extractor(db: Session = Depends(get_db)):
-    db.expire_on_commit = False
-    available_extractor = db.query(ExtractorModel).filter(ExtractorModel.status == "available").first()
-    if not available_extractor:
-        raise HTTPException(status_code=503, detail="No available extractors")
+def get_available_extractor():
+    """Finds an available extractor, marks it as busy, and returns its info."""
+    # Scan through all extractor keys
+    for key in r.scan_iter("extractor:*"):
+        extractor_info = r.hgetall(key)
+        if extractor_info.get("status") == "available":
+            # Atomically mark as busy and return
+            r.hset(key, "status", "busy")
+            return {
+                "extractor_id": extractor_info["extractor_id"],
+                "extractor_url": extractor_info["extractor_url"]
+            }
     
-    available_extractor.status = "busy"
-    db.commit()
-    
-    return {
-        "extractor_id": available_extractor.extractor_id,
-        "extractor_url": available_extractor.extractor_url
-    }
+    raise HTTPException(status_code=503, detail="No available extractors")
 
 @app.get("/health")
 def health_check():
+    """Health check endpoint."""
     return {"status": "ok"}
