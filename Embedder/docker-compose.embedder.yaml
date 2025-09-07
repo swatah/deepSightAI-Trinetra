@@ -57,7 +57,7 @@ services:
         condition: service_healthy
     environment:
       # Milvus connection settings (internal)
-      -       - MILVUS_HOST=milvus-standalone
+      - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       # Model configuration
       - EMBEDDING_DIM=512
