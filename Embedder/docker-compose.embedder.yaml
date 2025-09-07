@@ -57,13 +57,18 @@ services:
         condition: service_healthy
     environment:
       # Milvus connection settings (internal)
-      - MILVUS_HOST=milvus-standalone
+      -       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
+      # Model configuration
+      - EMBEDDING_DIM=512
       # MinIO connection settings (external - from extractor server)
       - MINIO_URL=host.docker.internal:9000
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - FRAME_BUCKET=frames
+      # ONNX Configuration
+      - USE_ONNX=1
+      - ONNX_MODEL_PATH=models/open_clip_vit_b32.onnx
       # Processing settings
       - FILES_PER_EMBED_BATCH=32
       - INSERT_BATCH_SIZE=500
