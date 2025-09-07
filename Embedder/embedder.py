@@ -3,11 +3,9 @@ import time
 import logging
 import tempfile
 from typing import List
-import numpy as np
 
 import torch
 import open_clip
-import onnxruntime as ort
 from PIL import Image
 from minio import Minio
 from minio.error import S3Error
@@ -26,7 +24,7 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 
 #Milvus collection details
 COLLECTION_NAME = os.getenv("MILVUS_COLLECTION", "video_frames")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "512"))  # ViT-B-32 embedding size
+EMBEDDING_DIM = 512  # ViT-B-32 embedding size
 
 #MinIO variables
 MINIO_URL = os.getenv("MINIO_URL", "localhost:9000")
@@ -42,10 +40,6 @@ INSERT_BATCH_SIZE = int(os.getenv("INSERT_BATCH_SIZE", "1000"))
 SLEEP_NO_WORK_SECONDS = int(os.getenv("SLEEP_NO_WORK_SECONDS", "10"))
 SLEEP_ON_ERROR_SECONDS = int(os.getenv("SLEEP_ON_ERROR_SECONDS", "30"))
 
-# ONNX Configuration
-USE_ONNX = os.getenv("USE_ONNX", "1") == "1"
-ONNX_MODEL_PATH = os.getenv("ONNX_MODEL_PATH", "models/open_clip_vit_b32.onnx")
-
 PIN_MEMORY = os.getenv("PIN_MEMORY", "1") == "1" and torch.cuda.is_available()
 USE_AUTOCast = torch.cuda.is_available() 
 
@@ -55,54 +49,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("embedder")
 
-# Global variables for model and preprocessing
-model = None
-preprocess = None
-onnx_session = None
+
+# loading OpenCLIP model
+logger.info("Loading OpenCLIP model ViT-B-32 (laion2b_s34b_b79k)...")
+model, _, preprocess = open_clip.create_model_and_transforms(
+    "ViT-B-32", pretrained="laion2b_s34b_b79k"
+)
+model.eval()
+
+# use gpu if available as cuda is faster for embedding
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# Load model (ONNX or PyTorch)
-if USE_ONNX and os.path.exists(ONNX_MODEL_PATH):
-    logger.info(f"Loading ONNX model from {ONNX_MODEL_PATH}...")
-    
-    # Set up ONNX Runtime providers
-    if torch.cuda.is_available():
-        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-        logger.info("ONNX using GPU acceleration")
-    else:
-        providers = ['CPUExecutionProvider']
-        logger.info("ONNX using CPU")
-    
-    try:
-        # Create ONNX session
-        onnx_session = ort.InferenceSession(ONNX_MODEL_PATH, providers=providers)
-        
-        # Get preprocessing transforms without loading the full model
-        _, _, preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained=None)
-        
-        logger.info("✅ ONNX model loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load ONNX model: {e}")
-        logger.info("Falling back to PyTorch model...")
-        USE_ONNX = False
-        onnx_session = None
-
-if not USE_ONNX or not os.path.exists(ONNX_MODEL_PATH):
-    logger.info("Loading PyTorch OpenCLIP model ViT-B-32...")
-    local_pytorch_model = "models/open_clip_pytorch_model.bin"
-    if os.path.exists(local_pytorch_model):
-        logger.info(f"Using local PyTorch model: {local_pytorch_model}")
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-32", pretrained=local_pytorch_model
-        )
-    else:
-        logger.info("Using online pretrained model: laion2b_s34b_b79k")
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-32", pretrained="laion2b_s34b_b79k"
-        )
-    model.eval()
-    model.to(device)
-    logger.info(f"PyTorch model loaded on device: {device}")
+model.to(device)
+logger.info(f"Model loaded on device: {device}")
 
 def get_milvus_collection() -> Collection:
     """Connect to Milvus and return the collection, creating it + index if missing."""
@@ -317,34 +275,30 @@ def cleanup_temp_files(file_paths: List[str]):
             logger.warning(f"Could not delete temporary file {path}: {e}")
 
 
-def delete_frame_objects(minio_client: Minio, frame_objects: List[str]):
-    """Delete frame objects from the frames bucket after successful processing."""
-    deleted_count = 0
-    for frame_object in frame_objects:
-        try:
-            minio_client.remove_object(FRAME_BUCKET, frame_object)
-            deleted_count += 1
-            logger.debug(f"Deleted frame: {frame_object}")
-        except S3Error as e:
-            logger.error(f"Error deleting frame {frame_object}: {e}")
-    logger.info(f"Successfully deleted {deleted_count}/{len(frame_objects)} frames from {FRAME_BUCKET}")
+def list_frame_folders(base_dir: str) -> List[str]:
+    """DEPRECATED: List immediate subdirectories under base_dir."""
+    if not os.path.isdir(base_dir):
+        return []
+    with os.scandir(base_dir) as it:
+        return [entry.name for entry in it if entry.is_dir()]
 
 
-def delete_rtsp_frame_objects(minio_client: Minio, bucket_name: str, frame_objects: List[str]):
-    """Delete frame objects from an RTSP bucket after successful processing."""
-    deleted_count = 0
-    for frame_object in frame_objects:
-        try:
-            minio_client.remove_object(bucket_name, frame_object)
-            deleted_count += 1
-            logger.debug(f"Deleted RTSP frame: {bucket_name}/{frame_object}")
-        except S3Error as e:
-            logger.error(f"Error deleting RTSP frame {bucket_name}/{frame_object}: {e}")
-    logger.info(f"Successfully deleted {deleted_count}/{len(frame_objects)} frames from {bucket_name}")
+def list_image_files(folder_path: str) -> List[str]:
+    """DEPRECATED: List image files in a local folder."""
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    files = []
+    with os.scandir(folder_path) as it:
+        for entry in it:
+            if entry.is_file():
+                _, ext = os.path.splitext(entry.name)
+                if ext.lower() in exts:
+                    files.append(entry.name)
+    files.sort()
+    return files
+
 
 @torch.no_grad()
 #Normalize and encode images using OpenCLIP
-@torch.no_grad()
 def encode_images(paths: List[str]) -> torch.Tensor:
     """Encode a list of image paths into a tensor of normalized CLIP features (N, D)."""
     tensors: List[torch.Tensor] = []
@@ -359,37 +313,19 @@ def encode_images(paths: List[str]) -> torch.Tensor:
             logger.error(f"Failed to load/preprocess image '{p}': {e}")
 
     if not tensors:
-        if USE_ONNX and onnx_session:
-            return torch.empty((0, EMBEDDING_DIM), dtype=torch.float32)
-        else:
-            return torch.empty((0, EMBEDDING_DIM), dtype=torch.float32, device=device)
+        return torch.empty((0, EMBEDDING_DIM), dtype=torch.float32, device=device)
 
     batch = torch.stack(tensors, dim=0)
-
-    if USE_ONNX and onnx_session:
-        # ONNX inference path
-        logger.debug(f"Processing {batch.shape[0]} images with ONNX")
-        batch_np = batch.numpy()
-        onnx_inputs = {onnx_session.get_inputs()[0].name: batch_np}
-        onnx_output = onnx_session.run(None, onnx_inputs)[0]
-        
-        # Convert back to PyTorch tensor and normalize
-        feats = torch.from_numpy(onnx_output).float()
-        feats = feats / feats.norm(dim=-1, keepdim=True)
-        return feats
-    else:
-        # PyTorch inference path
-        logger.debug(f"Processing {batch.shape[0]} images with PyTorch")
-        batch = batch.to(device, non_blocking=True)
-        
-        if USE_AUTOCast:
-            with torch.autocast("cuda"):
-                feats = model.encode_image(batch)
-        else:
+    batch = batch.to(device, non_blocking=True)
+#Use autocast to optimize performance if available
+    if USE_AUTOCast:
+        with torch.autocast("cuda"):
             feats = model.encode_image(batch)
+    else:
+        feats = model.encode_image(batch)
 
-        feats = feats / feats.norm(dim=-1, keepdim=True)
-        return feats.float()
+    feats = feats / feats.norm(dim=-1, keepdim=True)
+    return feats.float()
 
 
 #Main processing loop to read frames from MinIO, encode, and insert into Milvus
@@ -459,7 +395,6 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
     buf_video_id: List[str] = []
     buf_frame_path: List[str] = []
     buf_embedding: List[List[float]] = []
-    processed_frames = []  # Track successfully processed frames for deletion
 
     # Process frames in chunks to avoid downloading all at once
     for frame_batch in chunk_list(frame_objects, FILES_PER_EMBED_BATCH):
@@ -480,7 +415,6 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
                 buf_video_id.append(video_prefix)
                 buf_frame_path.append(frame_obj)  # Store MinIO object path
                 buf_embedding.append(vec)
-                processed_frames.append(frame_obj)  # Track for deletion
 
             # Clean up temporary files
             cleanup_temp_files(local_paths)
@@ -488,19 +422,15 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
             # Insert when buffer is large enough
             if len(buf_video_id) >= INSERT_BATCH_SIZE:
                 logger.info(f"Inserting batch of {len(buf_video_id)} vectors into Milvus...")
-                try:
-                    collection.insert([
-                        buf_video_id,
-                        buf_frame_path,
-                        buf_embedding,
-                    ])
-                    collection.flush()
-                    buf_video_id.clear()
-                    buf_frame_path.clear()
-                    buf_embedding.clear()
-                except Exception as e:
-                    logger.error(f"Error inserting batch into Milvus: {e}")
-                    raise  # Re-raise to skip deletion for this batch
+                collection.insert([
+                    buf_video_id,
+                    buf_frame_path,
+                    buf_embedding,
+                ])
+                collection.flush()
+                buf_video_id.clear()
+                buf_frame_path.clear()
+                buf_embedding.clear()
 
             # Optional: free GPU memory between mini-batches
             if torch.cuda.is_available():
@@ -513,24 +443,14 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
     # Insert any remaining vectors
     if buf_video_id:
         logger.info(f"Inserting final batch of {len(buf_video_id)} vectors into Milvus...")
-        try:
-            collection.insert([
-                buf_video_id,
-                buf_frame_path,
-                buf_embedding,
-            ])
-            collection.flush()
-        except Exception as e:
-            logger.error(f"Error inserting final batch into Milvus: {e}")
-            # Don't delete frames if insertion failed
-            return
+        collection.insert([
+            buf_video_id,
+            buf_frame_path,
+            buf_embedding,
+        ])
+        collection.flush()
 
-    # Always delete successfully processed frames to save space
-    if processed_frames:
-        logger.info(f"Deleting {len(processed_frames)} processed frames from {segment_prefix}")
-        delete_frame_objects(minio_client, processed_frames)
-
-    # Mark segment as processed only after successful inserts and deletions
+    # Mark segment as processed only after successful inserts
     mark_segment_processed(minio_client, segment_prefix)
     logger.info(f"Finished processing and marked segment as done: {segment_prefix}")
 
@@ -544,7 +464,6 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
     buf_video_id: List[str] = []
     buf_frame_path: List[str] = []
     buf_embedding: List[List[float]] = []
-    processed_frames = []  # Track successfully processed frames for deletion
 
     # Process frames in chunks to avoid downloading all at once
     for frame_batch in chunk_list(frame_objects, FILES_PER_EMBED_BATCH):
@@ -565,7 +484,6 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
                 buf_video_id.append(video_id)
                 buf_frame_path.append(f"{bucket_name}/{frame_obj}")  # Store full bucket/object path
                 buf_embedding.append(vec)
-                processed_frames.append(frame_obj)  # Track for deletion
 
             # Clean up temporary files
             cleanup_temp_files(local_paths)
@@ -573,19 +491,15 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
             # Insert when buffer is large enough
             if len(buf_video_id) >= INSERT_BATCH_SIZE:
                 logger.info(f"Inserting batch of {len(buf_video_id)} RTSP vectors into Milvus...")
-                try:
-                    collection.insert([
-                        buf_video_id,
-                        buf_frame_path,
-                        buf_embedding,
-                    ])
-                    collection.flush()
-                    buf_video_id.clear()
-                    buf_frame_path.clear()
-                    buf_embedding.clear()
-                except Exception as e:
-                    logger.error(f"Error inserting RTSP batch into Milvus: {e}")
-                    raise  # Re-raise to skip deletion for this batch
+                collection.insert([
+                    buf_video_id,
+                    buf_frame_path,
+                    buf_embedding,
+                ])
+                collection.flush()
+                buf_video_id.clear()
+                buf_frame_path.clear()
+                buf_embedding.clear()
 
             # Optional: free GPU memory between mini-batches
             if torch.cuda.is_available():
@@ -598,24 +512,14 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
     # Insert any remaining vectors
     if buf_video_id:
         logger.info(f"Inserting final batch of {len(buf_video_id)} RTSP vectors into Milvus...")
-        try:
-            collection.insert([
-                buf_video_id,
-                buf_frame_path,
-                buf_embedding,
-            ])
-            collection.flush()
-        except Exception as e:
-            logger.error(f"Error inserting final RTSP batch into Milvus: {e}")
-            # Don't delete frames if insertion failed
-            return
+        collection.insert([
+            buf_video_id,
+            buf_frame_path,
+            buf_embedding,
+        ])
+        collection.flush()
 
-    # Always delete successfully processed frames to save space
-    if processed_frames:
-        logger.info(f"Deleting {len(processed_frames)} processed frames from RTSP bucket {bucket_name}")
-        delete_rtsp_frame_objects(minio_client, bucket_name, processed_frames)
-
-    # Mark RTSP bucket as processed only after successful inserts and deletions
+    # Mark RTSP bucket as processed only after successful inserts
     mark_rtsp_bucket_processed(minio_client, bucket_name)
     logger.info(f"Finished processing and marked RTSP bucket as done: {bucket_name}")
 

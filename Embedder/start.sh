@@ -10,15 +10,15 @@ if [ ! -f "models/open_clip_vit_b32.onnx" ]; then
         echo "PyTorch model found. Exporting to ONNX..."
         python export_to_onnx.py
         if [ $? -eq 0 ]; then
-            echo "✅ ONNX export successful"
+            echo "ONNX export successful"
         else
-            echo "❌ ONNX export failed, continuing with PyTorch model"
+            echo "ONNX export failed, continuing with PyTorch model"
         fi
     else
         echo "No local models found. Will download model on first run."
     fi
 else
-    echo "✅ ONNX model already exists"
+    echo "ONNX model already exists"
 fi
 
 echo "Starting embedder service..."

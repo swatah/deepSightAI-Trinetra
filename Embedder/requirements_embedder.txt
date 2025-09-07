@@ -4,6 +4,3 @@ pymilvus
 Pillow
 protobuf==4.24.4
 minio
-onnx
-onnxruntime-gpu
-onnxruntime

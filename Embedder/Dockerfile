@@ -11,16 +11,8 @@ COPY requirements_embedder.txt .
 # Install the Python packages.
 RUN pip install --no-cache-dir -r requirements_embedder.txt
 
-# Copy the models directory (including ONNX model)
-COPY models/ ./models/
-
-# Copy the embedder script and startup script into the container.
+# Copy the embedder script into the container.
 COPY embedder.py .
-COPY export_to_onnx.py .
-COPY start.sh .
-
-# Make the startup script executable
-RUN chmod +x start.sh
 
 # The command to run when the container starts.
-CMD ["./start.sh"]
+CMD ["python", "embedder.py"]
