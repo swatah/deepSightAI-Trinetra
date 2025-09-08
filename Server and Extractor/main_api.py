@@ -138,3 +138,14 @@ def get_rtsp_frames(bucket_name: str, start_time: datetime, end_time: datetime):
             continue
 
     return {"frames": matching_frames}
+
+@app.get("/status")
+async def get_system_status():
+    """Get the status of all registered services."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{REGISTRY_URL}/get_all_services")
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not fetch system status: {e}")
