@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import tempfile
+import httpx
 from typing import List
 import numpy as np
 
@@ -33,6 +34,11 @@ MINIO_URL = os.getenv("MINIO_URL", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 FRAME_BUCKET = os.getenv("FRAME_BUCKET", "frames")
+
+#Registry variables
+REGISTRY_URL = os.getenv("REGISTRY_URL", "http://registry:8000")
+EMBEDDER_ID = os.getenv("EMBEDDER_ID", "embedder-1")
+EMBEDDER_URL = os.getenv("EMBEDDER_URL", "http://embedder-1:8000")
 
 #Processing markers
 PROCESSED_MARKER = ".processed"
@@ -291,6 +297,30 @@ def mark_segment_processed(minio_client: Minio, segment_prefix: str):
         logger.error(f"Error marking segment {segment_prefix} as processed: {e}")
 
 
+def remove_processed_marker(minio_client: Minio, segment_prefix: str):
+    """Remove the processed marker for a segment."""
+    marker_object = f"{segment_prefix}/{PROCESSED_MARKER}"
+    try:
+        minio_client.remove_object(FRAME_BUCKET, marker_object)
+        logger.info(f"Removed processed marker for {segment_prefix}")
+    except S3Error as e:
+        logger.debug(f"Could not remove processed marker for {segment_prefix}: {e}")
+
+
+def check_segment_has_new_frames(minio_client: Minio, segment_prefix: str) -> bool:
+    """Check if a segment has any frame files (excluding the processed marker)."""
+    try:
+        objects = minio_client.list_objects(FRAME_BUCKET, prefix=f"{segment_prefix}/", recursive=True)
+        frame_files = [
+            obj.object_name for obj in objects 
+            if not obj.object_name.endswith(PROCESSED_MARKER)
+        ]
+        return len(frame_files) > 0
+    except Exception as e:
+        logger.error(f"Error checking frames in {segment_prefix}: {e}")
+        return False
+
+
 def download_frame_objects(minio_client: Minio, frame_objects: List[str]) -> List[str]:
     """Download frame objects from MinIO to temporary files and return local paths."""
     local_paths = []
@@ -397,6 +427,9 @@ def process_frames():
     collection = get_milvus_collection()
     minio_client = get_minio_client()
 
+    # Mark as available when starting
+    update_embedder_status("available")
+
     while True:
         try:
             found_new_work = False
@@ -410,9 +443,18 @@ def process_frames():
                 for segment_prefix in segments:
                     # Check if this segment has already been processed
                     if is_segment_processed(minio_client, segment_prefix):
-                        continue
+                        # Even if marked as processed, check if there are new frames
+                        if check_segment_has_new_frames(minio_client, segment_prefix):
+                            logger.info(f"Found new frames in previously processed segment: {segment_prefix}")
+                            # Remove the old processed marker since there are new frames
+                            remove_processed_marker(minio_client, segment_prefix)
+                        else:
+                            # No new frames, skip this segment
+                            continue
 
                     found_new_work = True
+                    # Mark as busy when starting work
+                    update_embedder_status("busy")
                     logger.info(f"Found new segment to process: {segment_prefix}")
 
                     # Get all frame objects for this segment
@@ -424,6 +466,9 @@ def process_frames():
 
                     # Process the segment
                     process_segment_frames(minio_client, collection, video_prefix, segment_prefix, frame_objects)
+                    
+                    # Mark as available after completing work
+                    update_embedder_status("available")
 
             # Process RTSP buckets
             rtsp_buckets = list_rtsp_buckets(minio_client)
@@ -433,6 +478,8 @@ def process_frames():
                     continue
 
                 found_new_work = True
+                # Mark as busy when starting work
+                update_embedder_status("busy")
                 logger.info(f"Found new RTSP bucket to process: {bucket_name}")
 
                 # Get all frame objects in this bucket
@@ -444,12 +491,19 @@ def process_frames():
 
                 # Process the RTSP bucket
                 process_rtsp_frames(minio_client, collection, bucket_name, frame_objects)
+                
+                # Mark as available after completing work
+                update_embedder_status("available")
 
             if not found_new_work:
+                # Ensure we're marked as available when idle
+                update_embedder_status("available")
                 time.sleep(SLEEP_NO_WORK_SECONDS)
 
         except Exception as e:
             logger.exception(f"An unexpected error occurred in the main loop: {e}")
+            # Mark as available even after errors
+            update_embedder_status("available")
             time.sleep(SLEEP_ON_ERROR_SECONDS)
 
 
@@ -530,9 +584,17 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
         logger.info(f"Deleting {len(processed_frames)} processed frames from {segment_prefix}")
         delete_frame_objects(minio_client, processed_frames)
 
-    # Mark segment as processed only after successful inserts and deletions
-    mark_segment_processed(minio_client, segment_prefix)
-    logger.info(f"Finished processing and marked segment as done: {segment_prefix}")
+    # Check if segment is now empty after deleting all frames
+    if not check_segment_has_new_frames(minio_client, segment_prefix):
+        logger.info(f"Segment {segment_prefix} is now empty, will allow reprocessing")
+        # Don't mark as processed if there are no frames left
+        # This allows the same segment name to be reused for new videos
+    else:
+        # Mark segment as processed only if there are still unprocessed frames
+        mark_segment_processed(minio_client, segment_prefix)
+        logger.info(f"Finished processing and marked segment as done: {segment_prefix}")
+        
+    logger.info(f"Completed processing segment: {segment_prefix}")
 
 
 def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name: str, frame_objects: List[str]):
@@ -620,5 +682,38 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
     logger.info(f"Finished processing and marked RTSP bucket as done: {bucket_name}")
 
 
+def register_with_registry():
+    """Register this embedder with the central registry."""
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(
+                f"{REGISTRY_URL}/register_embedder",
+                json={
+                    "embedder_id": EMBEDDER_ID,
+                    "embedder_url": EMBEDDER_URL
+                }
+            )
+            response.raise_for_status()
+            logger.info(f"Successfully registered embedder {EMBEDDER_ID} with registry")
+    except Exception as e:
+        logger.error(f"Failed to register with registry: {e}")
+
+def update_embedder_status(status: str):
+    """Update this embedder's status in the registry."""
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.post(
+                f"{REGISTRY_URL}/update_embedder_status",
+                params={"embedder_id": EMBEDDER_ID, "status": status}
+            )
+            response.raise_for_status()
+    except Exception as e:
+        logger.warning(f"Failed to update embedder status to {status}: {e}")
+
+
 if __name__ == "__main__":
+    # Register with registry on startup
+    register_with_registry()
+    
+    # Start processing frames
     process_frames()

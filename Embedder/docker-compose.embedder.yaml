@@ -66,6 +66,10 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin
       - FRAME_BUCKET=frames
+      # Registry connection settings (internal - connect to extractor network)
+      - REGISTRY_URL=http://registry:8000
+      - EMBEDDER_ID=embedder-1
+      - EMBEDDER_URL=http://embedder-1:8001
       # ONNX Configuration
       - USE_ONNX=1
       - ONNX_MODEL_PATH=models/open_clip_vit_b32.onnx
@@ -77,11 +81,16 @@ services:
       - LOG_LEVEL=INFO
     networks:
       - embedder-net
+      - video-net  # Connect to extractor network for registry access
 
 
 # Defines the embedder network
 networks:
   embedder-net:
+  # Reference the existing video-net from extractor services
+  video-net:
+    external: true
+    name: serverandextractor_video-net
 
 # Defines the named volumes for persistent data storage
 volumes:

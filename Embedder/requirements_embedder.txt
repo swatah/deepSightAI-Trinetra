@@ -7,3 +7,4 @@ minio
 onnx
 onnxruntime-gpu
 onnxruntime
+httpx
