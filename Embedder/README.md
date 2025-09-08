@@ -3,6 +3,17 @@
 This service automatically scans for video frames in a MinIO bucket, generates vector embeddings for each frame using a bundled OpenCLIP model, and stores them in a Milvus vector database. This enables efficient similarity searching on video content.
 
 The system runs as a set of containerized services managed by Docker Compose. The vision encoder can be exported to ONNX format for optimized inference or integration.
+
+## Service Registry Integration
+
+**Registry Communication**: The embedder now registers itself with the central registry service and reports its status (available/busy) in real-time.
+
+**Smart Reprocessing**: The service now intelligently handles reprocessing scenarios:
+- Detects new frames in previously processed segments
+- Automatically removes stale `.processed` markers when new content is available
+- Prevents permanent blocking of segment folders
+
+**Status Monitoring**: You can now monitor embedder status through the main API at `http://localhost:8080/status`
 ## How It Works
 
 1.  **Scan**: The service continuously scans MinIO buckets (`frames` and `frames-rtsp-*`) for new, unprocessed video segments or RTSP frame buckets.
@@ -103,6 +114,35 @@ The service is configured using environment variables in the `docker-compose.emb
 | `FILES_PER_EMBED_BATCH` | Number of frames to process at once.                        | `32`                        |
 | `INSERT_BATCH_SIZE`     | Number of embeddings to batch before inserting into Milvus. | `500`                       |
 | `USE_ONNX`              | Whether to use ONNX model for inference if available.       | `"1"` (enabled)             |
+| `REGISTRY_URL`          | URL for the central registry service.                       | `http://registry:8000`      |
+| `EMBEDDER_ID`           | Unique identifier for this embedder instance.               | `embedder-1`                |
+| `EMBEDDER_URL`          | URL where this embedder can be reached.                     | `http://embedder-1:8001`    |
+
+## GPU Configuration
+
+### For Systems WITH GPU:
+The default configuration uses `onnxruntime-gpu` for optimal performance. No changes needed.
+
+### For Systems WITHOUT GPU:
+If you don't have a GPU or encounter ONNX GPU-related errors, modify `requirements_embedder.txt`:
+
+**Remove this line:**
+```
+onnxruntime-gpu
+```
+
+**Keep this line:**
+```
+onnxruntime
+```
+
+This will use CPU-only ONNX runtime, which works on all systems but may be slower.
+
+### Disabling ONNX Entirely:
+If you prefer to use PyTorch only (no ONNX), set this environment variable in `docker-compose.embedder.yaml`:
+```yaml
+- USE_ONNX=0
+```
 
 ## Usage
 
