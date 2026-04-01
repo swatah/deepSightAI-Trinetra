@@ -1,0 +1,46 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+    "--strict-config",
+    "--color=yes",
+]
+markers = [
+    "unit: Unit tests (fast, isolated)",
+    "integration: Integration tests (with external services)",
+    "e2e: End-to-end tests (full stack)",
+    "perf: Performance tests",
+    "security: Security tests",
+    "slow: Tests that take > 5s",
+]
+filterwarnings = [
+    "error",
+    "ignore::UserWarning",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+omit = [
+    "src/migrations/*",
+    "src/scripts/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if False:",
+    "pass",
+    "raise ImportError",
+]
+precision = 2

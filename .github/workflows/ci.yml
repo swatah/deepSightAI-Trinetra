@@ -1,0 +1,318 @@
+name: CI / Test-Driven Development Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # Job 1: Pre-check (validate commit messages, task tracking)
+  pre-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Get full history for commit checks
+
+    - name: Check commit messages follow convention
+      run: |
+        # Get all commit messages in this PR
+        COMMITS=$(git log --oneline --pretty=format:%s ${{ github.event.pull_request.base.sha }}..HEAD 2>/dev/null || echo "")
+        echo "Commits in this PR:"
+        echo "$COMMITS"
+
+        for commit in $COMMITS; do
+          echo "Checking: $commit"
+          # Must have Task: T1.2.3 pattern
+          if ! echo "$commit" | grep -qE "Task: T\d+\.\d+\.\d+"; then
+            echo "❌ Commit '$commit' missing Task reference"
+            echo "   Format: 'feat(component): description\n\n- Task: T1.2.3...'"
+            exit 1
+          fi
+          echo "✓ OK"
+        done
+
+    - name: Verify tracking database exists
+      run: |
+        if [ ! -f .task_state/tasks.json ]; then
+          echo "⚠️  No .task_state/tasks.json found"
+          echo "   Run 'python scripts/tracking.py init' to initialize"
+          exit 1
+        fi
+
+  # Job 2: Static Analysis (linting, type checking, manifest validation)
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        pip install black flake8 isort mypy bandit
+        pip install -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt
+
+    - name: Black (code formatting)
+      run: |
+        black --check --line-length 100 src/ tests/
+        black --check --line-length 100 *.py
+
+    - name: isort (import sorting)
+      run: isort --check-only --profile black src/ tests/
+
+    - name: flake8 (linting)
+      run: flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+
+    - name: mypy (type checking)
+      run: |
+        mypy src/ --ignore-missing-imports --no-strict-optional
+      continue-on-error: true  # Type hints may be incomplete
+
+    - name: bandit (security scanning)
+      run: bandit -r src/ -x tests/
+
+    - name: Validate Kubernetes manifests
+      run: |
+        # Install kubeval
+        wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
+        tar -xzf kubeval-linux-amd64.tar.gz
+        sudo mv kubeval /usr/local/bin/
+
+        # Validate all manifests
+        find k8s -name "*.yaml" -type f | xargs kubeval --strict --ignore-missing-schemas
+
+    - name: Validate Helm charts (if exist)
+      run: |
+        if [ -d "helm" ]; then
+          helm lint helm/*
+        fi
+
+  # Job 3: Unit Tests with coverage
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        pip install pytest pytest-cov pytest-xdist
+        pip install -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt
+
+    - name: Run unit tests with coverage
+      run: |
+        pytest tests/unit/ \
+          -v \
+          --cov=src \
+          --cov-report=xml \
+          --cov-report=html \
+          --cov-fail-under=80 \
+          --cov-branch \
+          -x  # Stop on first failure
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: coverage.xml
+        fail_ci_if_error: false
+
+  # Job 4: Integration Tests (requires services)
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: clipsight_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+
+      minio:
+        image: minio/minio
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports: ['9000:9000']
+        command: minio server /data
+
+      milvus-standalone:
+        image: milvusdb/milvus:v2.4.4
+        ports: ['19530:19530']
+        env:
+          ETCD_ENDPOINTS: etcd:2379
+          MINIO_ADDRESS: minio:9000
+        options: >-
+          --health-cmd "curl -f http://localhost:9091/healthz"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        pip install pytest pytest-cov
+        pip install -r requirements.txt -r requirements_embedder.txt
+
+    - name: Wait for services to be ready
+      run: |
+        # Wait for Milvus
+        timeout 60 bash -c 'until curl -f http://localhost:9091/healthz; do echo "Waiting for Milvus..."; sleep 3; done'
+        # Wait for MinIO
+        timeout 30 bash -c 'until nc -z localhost 9000; do echo "Waiting for MinIO..."; sleep 2; done'
+
+    - name: Run integration tests
+      env:
+        DATABASE_URL: postgresql://postgres:test@localhost:5432/clipsight_test
+        REDIS_URL: redis://localhost:6379
+        MINIO_URL: http://localhost:9000
+        MINIO_ACCESS_KEY: minioadmin
+        MINIO_SECRET_KEY: minioadmin
+        MILVUS_HOST: localhost
+        MILVUS_PORT: 19530
+      run: |
+        pytest tests/integration/ \
+          -v \
+          --cov=src \
+          --cov-append \
+          --cov-fail-under=80 \
+          -x
+
+    # Optional: uploadMilvus data from integration tests for debugging
+    - name: Upload integration test logs
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: integration-logs
+        path: |
+          tests/integration/logs/
+          .task_state/
+
+  # Job 5: Build and push container images (on main branch only)
+  build-images:
+    needs: [pre-check, static-analysis, unit-tests, integration-tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      images-built: ${{ steps.build.outputs.images-built }}
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push
+      id: build
+      run: |
+        # Build each service
+        IMAGES="registry main-api extractor embedder search-api"
+        VERSION=$(git rev-parse --short HEAD)
+
+        for img in $IMAGES; do
+          docker build -t clipsight/$img:$VERSION -t clipsight/$img:latest -f Dockerfile.${img} .
+          docker push clipsight/$img:$VERSION
+          docker push clipsight/$img:latest
+        done
+
+        echo "images-built=$VERSION" >> $GITHUB_OUTPUT
+
+  # Job 6: Deploy to staging (GitOps)
+  deploy-staging:
+    needs: build-images
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+
+    - name: Deploy to staging via ArgoCD
+      run: |
+        # Trigger ArgoCD sync for staging environment
+        kubectl apply -f argocd-apps/clipsight-staging.yaml
+        kubectl wait --for=condition=synced app/clipsight-staging -n argocd --timeout=300s
+      env:
+        KUBECONFIG: ${{ secrets.KUBECONFIG_STAGING }}
+
+    - name: Run smoke tests
+      run: |
+        # Wait for rollout
+        kubectl rollout status deployment/main-api -n clipsight-staging --timeout=180s
+
+        # Run smoke tests
+        API_URL=$(kubectl get svc api-gateway -n clipsight-staging -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        pytest tests/smoke/staging_smoke.py --api-url=https://$API_URL
+      env:
+        KUBECONFIG: ${{ secrets.KUBECONFIG_STAGING }}
+
+  # Job 7: Generate summary
+  summary:
+    needs: [pre-check, static-analysis, unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Generate build summary
+      run: |
+        cat << 'EOF' > SUMMARY.md
+        # CI Results
+
+        ## Commit
+        - SHA: ${{ github.sha }}
+        - Author: ${{ github.actor }}
+        - Branch: ${{ github.ref_name }}
+
+        ## Jobs
+        - Pre-check: ✓ (required)
+        - Static Analysis: ✓
+        - Unit Tests: ✓
+        - Integration Tests: ✓
+
+        ## Coverage
+        $(cat coverage.xml 2>/dev/null | grep -oP 'line-rate="\K[^"]+' | head -1 || echo "N/A")
+
+        ## Notes
+        All checks passed. Ready for review.
+        EOF
+
+        cat SUMMARY.md
+
+    - name: Upload summary
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-summary
+        path: SUMMARY.md
