@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # Test runner container
+  test-runner:
+    build:
+      context: .
+      dockerfile: tests/Dockerfile.test
+    volumes:
+      - ./:/workspace
+      - test-results:/test-results
+    environment:
+      - MINIO_URL=http://minio-test:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - REDIS_URL=redis://redis-test:6379
+      - MILVUS_HOST=milvus-test
+      - MILVUS_PORT=19530
+      - DATABASE_URL=postgresql://postgres:test@postgres-test:5432/clipsight_test
+    depends_on:
+      - minio-test
+      - redis-test
+      - postgres-test
+      - milvus-test
+    command: ["pytest", "-v", "--junitxml=/test-results/results.xml"]
+
+  # Minimal services for integration tests
+  minio-test:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: minio server /data
+    ports:
+      - "9001:9000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres-test:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: clipsight_test
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  milvus-test:
+    image: milvusdb/milvus:v2.4.4
+    ports:
+      - "19531:19530"
+    environment:
+      ETCD_ENDPOINTS: etcd-test:2379
+      MINIO_ADDRESS: minio-test:9000
+    depends_on:
+      - etcd-test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  etcd-test:
+    image: quay.io/coreos/etcd:v3.5.14
+    command: etcd -advertise-client-urls=http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379
+    ports:
+      - "2379:2379"
+
+volumes:
+  test-results:

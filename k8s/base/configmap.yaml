@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clipsight-common-config
+  labels:
+    app.kubernetes.io/instance: clipsight
+data:
+  # Common environment variables for all services
+  MINIO_URL: "http://minio:9000"
+  MINIO_ACCESS_KEY: "${MINIO_ACCESS_KEY}"
+  MINIO_SECRET_KEY: "${MINIO_SECRET_KEY}"
+  REDIS_URL: "redis://redis:6379"
+  REGISTRY_URL: "http://registry:8000"
+  LOG_LEVEL: "INFO"
+  # Database
+  POSTGRES_URL: "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/clipsight"
+  # Milvus
+  MILVUS_HOST: "milvus"
+  MILVUS_PORT: "19530"

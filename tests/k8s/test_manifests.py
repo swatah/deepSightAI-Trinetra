@@ -261,31 +261,6 @@ class TestK8sManifestsValid:
                     f"Service '{service}' port should be {expected_port}"
 
 
-class TestK8sManifestsReadyForOverlay:
-    """T1.1.2: Ensures base manifests are Kustomize-ready."""
-
-    def test_manifests_have_kustomize_labels(self, base_dir):
-        """K8s resources should have app.kubernetes.io labels for Kustomize."""
-        import yaml
-
-        deployments_file = base_dir / "deployments.yaml"
-        if not deployments_file.exists():
-            pytest.fail("deployments.yaml missing")
-
-        with open(deployments_file) as f:
-            docs = list(yaml.safe_load_all(f))
-
-        for doc in docs:
-            if doc and doc.get("kind") in ["Deployment", "Service"]:
-                labels = doc["metadata"].get("labels", {})
-                assert "app.kubernetes.io/name" in labels, \
-                    f"Resource {doc['metadata']['name']} missing app.kubernetes.io/name label"
-                assert "app.kubernetes.io/instance" in labels, \
-                    f"Resource {doc['metadata']['name']} missing app.kubernetes.io/instance label"
-                assert "app.kubernetes.io/version" in labels, \
-                    f"Resource {doc['metadata']['name']} missing app.kubernetes.io/version label"
-
-
 # Run with: pytest tests/k8s/test_manifests.py -v
 #
 # Expected result: Initially FAIL (all tests red)

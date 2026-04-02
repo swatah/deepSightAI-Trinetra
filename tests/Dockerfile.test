@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy requirements first (cache layer)
+COPY Embedder/requirements_embedder.txt /workspace/requirements_embedder.txt
+COPY ["Server and Extractor/requirements.txt", "/workspace/requirements.txt"]
+COPY UI/requirements_ui.txt /workspace/requirements_ui.txt
+RUN pip install --no-cache-dir -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt \
+    && pip install --no-cache-dir pytest pytest-cov pytest-xdist pyyaml
+
+# Copy source code
+COPY . .
+
+# Default command - can be overridden
+CMD ["pytest", "tests/unit/", "-v"]
