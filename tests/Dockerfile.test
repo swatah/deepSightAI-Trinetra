@@ -5,7 +5,11 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     curl \
+    bash \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Helm
+RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 # Set working directory
 WORKDIR /workspace
