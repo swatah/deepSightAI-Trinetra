@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+spec:
+  replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: main-api
+spec:
+  replicas: 3
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: extractor
+spec:
+  replicas: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedder
+spec:
+  replicas: 2

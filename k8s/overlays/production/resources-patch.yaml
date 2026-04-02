@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+spec:
+  template:
+    spec:
+      containers:
+      - name: registry
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: main-api
+spec:
+  template:
+    spec:
+      containers:
+      - name: main-api
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1000m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: extractor
+spec:
+  template:
+    spec:
+      containers:
+      - name: extractor
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1000m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedder
+spec:
+  template:
+    spec:
+      containers:
+      - name: embedder
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
