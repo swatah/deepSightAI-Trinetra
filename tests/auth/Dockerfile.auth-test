@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt pytest
 
 # Copy source - keep AuthService as a subdirectory
 COPY AuthService /workspace/AuthService
-COPY tests/auth /workspace/tests/auth
+# Copy shared package
+COPY shared /workspace/shared
+# Copy all tests (including middleware)
+COPY tests /workspace/tests
 
-CMD ["pytest", "tests/auth/test_auth_service.py", "-v"]
+CMD ["pytest", "tests/auth/", "tests/middleware/", "-v"]
