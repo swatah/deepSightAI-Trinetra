@@ -8,10 +8,13 @@ RUN: uvicorn auth_service:app --host 0.0.0.0 --port 8000
 """
 
 import os
+import json
+import secrets
+import string
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import (
@@ -138,6 +141,26 @@ class Role(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class APIKey(Base):
+    """API keys for programmatic access."""
+    __tablename__ = "api_keys"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    prefix = Column(String(12), unique=True, nullable=False)  # e.g., 'clp_live_xxx'
+    key_hash = Column(String(255), nullable=False)  # Argon2id hash of full key
+    name = Column(String(100), nullable=False)
+    permissions = Column(String)  # JSON array string
+    last_used_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User")
+    tenant = relationship("Tenant")
+
+
 class UserRole(Base):
     """Junction: user_tenant <-> role."""
     __tablename__ = "user_roles"
@@ -220,6 +243,21 @@ class TokenData(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+
+class APIKeyCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="Label for the API key")
+    permissions: List[str] = Field(default=[], description="Permissions granted to this key")
+    expires_in_days: int = Field(default=365, ge=1, le=3650, description="Expiration period in days")
+
+
+class APIKeyResponse(BaseModel):
+    id: int
+    prefix: str
+    key: str  # full key, shown only once
+    name: str
+    permissions: List[str]
+    expires_at: datetime
 
 
 # ============================================================================
@@ -342,11 +380,98 @@ def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     return Token(access_token=token, token_type="bearer")
 
 
+def get_current_user(request: Request) -> dict:
+    """
+    Dependency to extract and verify JWT from Authorization header.
+    Reuses decode_token to validate signature and expiration.
+    Returns the decoded payload.
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid Authorization header"
+        )
+    token = auth_header.split(" ", 1)[1].strip()
+    payload = decode_token(token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+    return payload
+
+
+@app.post("/auth/api-keys", response_model=APIKeyResponse)
+def create_api_key(
+    data: APIKeyCreate,
+    payload: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Generate a new API key for the authenticated user's tenant.
+
+    - User must be authenticated (JWT in Authorization header)
+    - API key is scoped to the user's current tenant
+    - Full key is returned once; only its hash is stored
+    - Permissions restrict what the key can do (future)
+    """
+    user_id = int(payload["sub"])
+    tenant_id = payload.get("tenant_id")
+    if tenant_id is None:
+        raise HTTPException(status_code=400, detail="User must belong to a tenant to create API keys")
+
+    # Ensure user belongs to tenant (redundancy check)
+    user_tenant = (
+        db.query(UserTenant)
+        .filter(UserTenant.user_id == user_id, UserTenant.tenant_id == tenant_id, UserTenant.status == "active")
+        .first()
+    )
+    if not user_tenant:
+        raise HTTPException(status_code=400, detail="User is not an active member of the tenant")
+
+    # Generate API key: prefix (8 chars) + suffix (32 hex)
+    alphabet = string.ascii_letters + string.digits
+    prefix = "cp_" + "".join(secrets.choice(alphabet) for _ in range(8))
+    suffix = secrets.token_hex(16)  # 32 hex chars
+    full_key = prefix + suffix
+
+    # Hash the full key using Argon2id (same as passwords)
+    key_hash = pwd_context.hash(full_key)
+
+    # Compute expiration
+    expires_at = datetime.utcnow() + timedelta(days=data.expires_in_days)
+
+    # Store in database
+    api_key = APIKey(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        prefix=prefix,
+        key_hash=key_hash,
+        name=data.name,
+        permissions=json.dumps(data.permissions) if data.permissions else "[]",
+        expires_at=expires_at,
+        created_at=datetime.utcnow()
+    )
+    db.add(api_key)
+    db.commit()
+    db.refresh(api_key)
+
+    return APIKeyResponse(
+        id=api_key.id,
+        prefix=prefix,
+        key=full_key,  # return full key only once
+        name=data.name,
+        permissions=data.permissions,
+        expires_at=expires_at
+    )
+
+
 # TODO: Implement additional endpoints:
-# - POST /auth/logout (token revocation)
-# - POST /auth/password-reset
-# - POST /auth/refresh (refresh tokens)
-# - GET /auth/me (user profile)
+# - /auth/logout (token revocation)
+# - /auth/password-reset
+# - /auth/refresh (refresh tokens)
+# - /auth/me (user profile)
 
 
 if __name__ == "__main__":
