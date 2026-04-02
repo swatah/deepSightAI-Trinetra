@@ -1,0 +1,151 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB: clipsight
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9090:9090"
+    command: minio server /data --console-address ":9090"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  registry:
+    build:
+      context: .
+      dockerfile: Dockerfile.registry
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  main-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.main-api
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+      REGISTRY_URL: http://registry:8000
+      MINIO_URL: http://minio:9000
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/clipsight
+    depends_on:
+      registry:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile.extractor
+    environment:
+      REGISTRY_URL: http://registry:8000
+      MINIO_URL: http://minio:9000
+      EXTRACTOR_ID: ${HOSTNAME}
+      EXTRACTOR_URL: http://${HOSTNAME}:8001
+    depends_on:
+      registry:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      replicas: 2
+
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile.embedder
+    environment:
+      REDIS_URL: redis://redis:6379
+      MINIO_URL: http://minio:9000
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  milvus:
+    image: milvusdb/milvus:v2.4.4
+    ports:
+      - "19530:19530"
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    depends_on:
+      etcd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.14
+    command: etcd -advertise-client-urls=http://0.0.0.0:2379 -listen-client-urls http://0.0.0.0:2379
+    ports:
+      - "2379:2379"
+
+volumes:
+  postgres_data:
+  minio_data:

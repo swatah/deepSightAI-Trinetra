@@ -9,6 +9,8 @@ services:
     volumes:
       - ./:/workspace
       - test-results:/test-results
+      # Mount Docker socket for k3d to create clusters using host Docker
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - MINIO_URL=http://minio-test:9000
       - MINIO_ACCESS_KEY=minioadmin
@@ -17,6 +19,8 @@ services:
       - MILVUS_HOST=milvus-test
       - MILVUS_PORT=19530
       - DATABASE_URL=postgresql://postgres:test@postgres-test:5432/clipsight_test
+    # k3d needs Docker and may need privileged for network setup
+    privileged: true
     depends_on:
       - minio-test
       - redis-test

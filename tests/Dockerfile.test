@@ -6,9 +6,28 @@ RUN apt-get update && apt-get install -y \
     g++ \
     curl \
     bash \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    apt-transport-https \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Helm
+# Install Docker CLI (for communicating with host Docker daemon via mounted socket)
+RUN curl -fsSL https://get.docker.com -o get-docker.sh && \
+    sh get-docker.sh && \
+    rm get-docker.sh
+
+# Install kubectl from Debian repositories (reliable)
+RUN apt-get update && apt-get install -y kubectl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Helm via official script
+RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Note: k3d binary may not be installed (tests will skip if not present)
+# kustomize is not needed - we use kubectl kustomize which is built-in
+
+# Install Helm (moved after Docker to ensure it's available)
 RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 # Set working directory
