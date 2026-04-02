@@ -50,7 +50,6 @@ jobs:
   # Job 2: Static Analysis (linting, type checking, manifest validation)
   static-analysis:
     runs-on: ubuntu-latest
-    continue-on-error: true  # Allow failures during early development Phase 1
     steps:
     - uses: actions/checkout@v4
 
@@ -74,35 +73,54 @@ jobs:
 
     - name: flake8 (linting)
       run: |
-        flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics || echo "⚠️  Linting issues found - fix before merge"
+        echo "Running flake8..."
+        flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        echo "✓ flake8 passed"
 
     - name: mypy (type checking)
       run: |
-        mypy src/ --ignore-missing-imports --no-strict-optional || echo "⚠️  Type checking issues - fix before merge"
-      continue-on-error: true
+        echo "Running mypy..."
+        mypy src/ --ignore-missing-imports --no-strict-optional
+        echo "✓ mypy passed"
+      continue-on-error: false
 
     - name: bandit (security scanning)
-      run: bandit -r src/ -x tests/ || echo "⚠️  Security scan issues - review before merge"
+      run: |
+        echo "Running bandit security scan..."
+        bandit -r src/ -x tests/
+        echo "✓ bandit security scan passed"
 
     - name: Validate Kubernetes manifests
       run: |
-        # Install kubeval
+        # Install kubeval and kube-score
         wget https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz
         tar -xzf kubeval-linux-amd64.tar.gz
         sudo mv kubeval /usr/local/bin/
 
+        # Install kube-score
+        curl -sL https://github.com/zegl/kube-score/releases/latest/download/kube-score_linux_amd64.tar.gz | tar -xz
+        sudo mv kube-score /usr/local/bin/
+
         # Validate all manifests if k8s/ exists
         if [ -d "k8s" ]; then
-          echo "Validating K8s manifests..."
-          find k8s -name "*.yaml" -type f | xargs kubeval --strict --ignore-missing-schemas || echo "⚠️  K8s manifest issues - fix before merge"
+          echo "Validating K8s manifests with kubeval..."
+          find k8s -name "*.yaml" -type f -not -path "k8s/overlays/*/templates/*" | xargs kubeval --strict --ignore-missing-schemas
+
+          echo "Scoring K8s manifests with kube-score..."
+          kube-score score k8s/base/ --output-format=json || true
+
+          echo "✓ All K8s manifest validations passed"
         else
-          echo "k8s/ directory not found - skipping manifest validation (Phase 1 task T1.1.1 not started)"
+          echo "⚠️  k8s/ directory not found - skipping manifest validation"
         fi
 
     - name: Validate Helm charts (if exist)
       run: |
         if [ -d "helm" ]; then
-          helm lint helm/* || echo "⚠️  Helm lint issues - fix before merge"
+          echo "Linting Helm charts..."
+          helm lint helm/*
+
+          echo "✓ Helm chart validation passed"
         fi
 
   # Job 3: Unit Tests with coverage (run in Docker)
@@ -123,14 +141,18 @@ jobs:
         docker run --rm \
           -v ${{ github.workspace }}/coverage:/coverage \
           clipsight/tests:latest \
-          pytest tests/unit/ \
+          pytest tests/ \
             -v \
             --cov=src \
             --cov-report=xml:/coverage/coverage.xml \
             --cov-report=html \
             --cov-fail-under=80 \
             --cov-branch \
-            -x
+            -x \
+            --ignore=tests/integration \
+            --ignore=tests/e2e \
+            --ignore=tests/perf \
+            --ignore=tests/security
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
