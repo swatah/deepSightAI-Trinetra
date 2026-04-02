@@ -1,0 +1,61 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: clipsight-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: clipsight-staging
+    app.kubernetes.io/part-of: clipsight
+spec:
+  project: staging
+  source:
+    repoURL: https://github.com/swatah/ClipSight.git
+    targetRevision: main
+    path: k8s/overlays/development
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: clipsight-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+    timeout: 10m
+  health:
+    healthRule:
+      get:
+        path: /health
+        port: 8080
+        scheme: HTTPS
+        timeout: 10
+    customHealthChecks:
+    - group: apps
+      kind: Deployment
+      match: []
+      name: main-api
+      unhealthy: {}
+    - group: apps
+      kind: Deployment
+      match: []
+      name: embedder
+      unhealthy: {}
+    - group: apps
+      kind: Deployment
+      match: []
+      name: extractor
+      unhealthy: {}
+    - group: apps
+      kind: Deployment
+      match: []
+      name: registry
+      unhealthy: {}
