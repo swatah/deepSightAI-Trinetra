@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /workspace
+
+# Set environment for tests - use SQLite file to avoid connection errors
+ENV DATABASE_URL=sqlite:///test.db
+
+# Copy requirements and install dependencies
+COPY AuthService/requirements.txt /workspace/
+RUN pip install --no-cache-dir -r requirements.txt pytest
+
+# Copy source - keep AuthService as a subdirectory
+COPY AuthService /workspace/AuthService
+COPY tests/auth /workspace/tests/auth
+
+CMD ["pytest", "tests/auth/test_auth_service.py", "-v"]
