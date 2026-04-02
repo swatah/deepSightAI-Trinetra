@@ -81,11 +81,11 @@ class TestAuthService:
         assert "access_token" in data
         assert data["token_type"] == "bearer"
 
-        # Verify token is valid JWT (can decode)
+        # Verify token is valid JWT (can decode with RS256)
         token = data["access_token"]
         from jose import jwt
-        from auth_service import SECRET_KEY, ALGORITHM
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        from auth_service import PUBLIC_KEY, ALGORITHM
+        payload = jwt.decode(token, PUBLIC_KEY, algorithms=[ALGORITHM])
         assert "sub" in payload  # user_id
         assert "email" in payload
         assert payload["email"] == "test@example.com"
@@ -151,8 +151,8 @@ class TestAuthService:
 
         # Verify token contains correct user_id
         from jose import jwt
-        from auth_service import SECRET_KEY, ALGORITHM
-        payload = jwt.decode(data["access_token"], SECRET_KEY, algorithms=[ALGORITHM])
+        from auth_service import PUBLIC_KEY, ALGORITHM
+        payload = jwt.decode(data["access_token"], PUBLIC_KEY, algorithms=[ALGORITHM])
         assert payload["sub"] == str(user.id)
         assert payload["email"] == user.email
 

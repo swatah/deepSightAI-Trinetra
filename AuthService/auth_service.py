@@ -22,6 +22,8 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 
 from passlib.context import CryptContext
 from jose import jwt, JWTError
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
 
 # ============================================================================
 # Configuration
@@ -31,9 +33,31 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:devpassword@localhost:5432/clipsight"
 )
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-CHANGE-IN-PRODUCTION")
-ALGORITHM = "HS256"
+
+# JWT Configuration - RS256 (asymmetric) for better security
+# In production, load from files: /run/secrets/jwt-private-key, /run/secrets/jwt-public-key
+ALGORITHM = "RS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# Generate RSA key pair for development (in production, load from secure storage)
+def _generate_rsa_keys():
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048,
+    )
+    # Serialize to PEM format for python-jose compatibility
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+    public_pem = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    return private_pem, public_pem
+
+PRIVATE_KEY, PUBLIC_KEY = _generate_rsa_keys()
 
 # ============================================================================
 # Database Setup
@@ -147,17 +171,17 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create a JWT access token."""
+    """Create a JWT access token signed with RS256."""
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire, "iat": datetime.utcnow()})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, PRIVATE_KEY, algorithm=ALGORITHM)
 
 
 def decode_token(token: str) -> Optional[dict]:
-    """Decode and validate JWT. Returns payload or None."""
+    """Decode and validate JWT using public key. Returns payload or None."""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, PUBLIC_KEY, algorithms=[ALGORITHM])
         return payload
     except JWTError:
         return None
@@ -246,8 +270,13 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    # Issue JWT
-    token = create_access_token(data={"sub": str(user.id), "email": user.email})
+    # Issue JWT with tenant_id=None, roles=[] (user will join tenant separately)
+    token = create_access_token(data={
+        "sub": str(user.id),
+        "email": user.email,
+        "tenant_id": None,
+        "roles": []
+    })
 
     return Token(access_token=token, token_type="bearer")
 
@@ -255,9 +284,10 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
 @app.post("/auth/login", response_model=Token)
 def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     """
-    Authenticate user and return JWT.
+    Authenticate user and return JWT with tenant context and roles.
 
     Validates email/password, updates last_login_at, issues token.
+    Includes: sub, email, tenant_id (if any), roles (list), exp, iat.
     """
     user = db.query(User).filter(User.email == credentials.email).first()
     if not user:
@@ -278,7 +308,37 @@ def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     user.last_login_at = datetime.utcnow()
     db.commit()
 
-    token = create_access_token(data={"sub": str(user.id), "email": user.email})
+    # Get user's tenant(s) and roles
+    # For simplicity, take first active tenant membership
+    user_tenant = (
+        db.query(UserTenant)
+        .filter(UserTenant.user_id == user.id, UserTenant.status == "active")
+        .first()
+    )
+
+    tenant_id = None
+    roles = []
+
+    if user_tenant:
+        tenant_id = user_tenant.tenant_id
+        # Fetch role names for this user in this tenant
+        user_roles = (
+            db.query(Role.name)
+            .join(UserRole, UserRole.role_id == Role.id)
+            .filter(UserRole.user_tenant_id == user_tenant.id)
+            .all()
+        )
+        roles = [r[0] for r in user_roles]
+
+    # Build token payload with required claims
+    token_data = {
+        "sub": str(user.id),
+        "email": user.email,
+        "tenant_id": tenant_id,
+        "roles": roles,
+    }
+
+    token = create_access_token(data=token_data)
     return Token(access_token=token, token_type="bearer")
 
 
