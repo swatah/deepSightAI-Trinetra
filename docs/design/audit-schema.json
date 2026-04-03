@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Audit Log Schema",
+  "description": "Schema for audit log entries in ClipSight",
+  "type": "object",
+  "required": [
+    "tenant_id",
+    "user_id",
+    "action",
+    "resource",
+    "timestamp",
+    "outcome"
+  ],
+  "properties": {
+    "tenant_id": {
+      "type": "string",
+      "description": "Unique identifier for the tenant"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "ID of the user who performed the action (or system)"
+    },
+    "action": {
+      "type": "string",
+      "description": "Type of action performed (e.g., CREATE, READ, UPDATE, DELETE, LOGIN, LOGOUT)",
+      "enum": ["CREATE", "READ", "UPDATE", "DELETE", "LOGIN", "LOGOUT", "ACCESS", "IMPORT", "EXPORT", "SHARE", "REVOKE"]
+    },
+    "resource": {
+      "type": "object",
+      "description": "The resource being acted upon",
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Resource type (e.g., video, user, api_key, tenant, frame)"
+        },
+        "id": {
+          "type": "string",
+          "description": "Resource identifier (UUID or other unique ID)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name of the resource (optional)"
+        }
+      }
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when the action occurred"
+    },
+    "outcome": {
+      "type": "string",
+      "description": "Result of the action",
+      "enum": ["SUCCESS", "FAILURE", "PARTIAL"]
+    },
+    "ip_address": {
+      "type": "string",
+      "description": "IP address from which the request originated",
+      "format": "ipv4"
+    },
+    "user_agent": {
+      "type": "string",
+      "description": "User agent string from the client (optional)"
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Correlation ID for tracing the request through the system (optional)"
+    },
+    "changes": {
+      "type": "array",
+      "description": "List of changes made (for UPDATE actions)",
+      "items": {
+        "type": "object",
+        "required": ["field", "old_value", "new_value"],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Name of the field that changed"
+          },
+          "old_value": {
+            "type": ["string", "number", "boolean", "null"],
+            "description": "Previous value (null if creating)"
+          },
+          "new_value": {
+            "type": ["string", "number", "boolean", "null"],
+            "description": "New value (null if deleting)"
+          }
+        }
+      }
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Error message if outcome is FAILURE (optional)"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Additional metadata specific to the action",
+      "additionalProperties": true
+    }
+  }
+}
