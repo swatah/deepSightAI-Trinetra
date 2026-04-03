@@ -1,0 +1,27 @@
+---
+# Default deny-all network policy
+# T1.4.6: Zero-trust networking: deny all traffic by default
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: default
+spec:
+  podSelector: {}  # Selects all pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress or egress rules means all are denied
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all-egress-only
+  namespace: clipsight
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  # No egress rules: deny all outgoing
