@@ -1,0 +1,103 @@
+site_name: ClipSight Enterprise
+site_description: Vendor-neutral video content search with semantic AI
+site_author: ClipSight Team
+repo_url: https://github.com/yourorg/clipsight
+repo_name: yourorg/clipsight
+
+theme:
+  name: material
+  feature:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.annotate
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search:
+      lang: en
+  - minify:
+      minify_html: true
+      minify_js: true
+      minify_css: true
+  - openapi:
+      file: docs/api/openapi.yaml
+  - mike
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - meta
+  - toc:
+      permalink: true
+      title: On this page
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Installation:
+      - Docker Compose: installation/docker-compose.md
+      - Kubernetes: installation/kubernetes.md
+      - Cloud (AWS/GCP/Azure): installation/cloud.md
+  - User Guide:
+      - Overview: user-guide/index.md
+      - Uploading Videos: user-guide/uploading.md
+      - Searching: user-guide/searching.md
+      - API Reference: user-guide/api.md
+  - Architecture:
+      - Overview: architecture/index.md
+      - Components: architecture/components.md
+      - Security: architecture/security.md
+      - Diagrams: architecture/diagrams.md
+  - Operations:
+      - Monitoring: operations/monitoring.md
+      - Backup & Restore: operations/backup-restore.md
+      - Troubleshooting: operations/troubleshooting.md
+      - FAQ: operations/faq.md
+  - Reference:
+      - Glossary: reference/glossary.md
+      - Configuration: reference/configuration.md
+  - About:
+      - Roadmap: about/roadmap.md
+      - Contributing: about/contributing.md
+      - License: about/license.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/yourorg/clipsight
+    - icon: fontawesome/brands/docker
+      link: https://hub.docker.com/u/clipsight
+  version:
+    provider: mike
+    default:
+      - latest
+      - stable

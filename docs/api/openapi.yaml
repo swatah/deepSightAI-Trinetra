@@ -1,0 +1,1140 @@
+openapi: 3.0.3
+info:
+  title: ClipSight API
+  description: |
+    Video content search platform API. Perform semantic search on videos using natural language.
+
+    Base URL: `https://api.clipsight.com/v1`
+
+    Authentication: All endpoints (except health) require either:
+    - `Authorization: Bearer <JWT_TOKEN>` header
+    - `X-API-Key: <api_key>` header
+
+    For evaluation deployments with auth disabled, omit authentication headers.
+  version: 1.0.0
+  contact:
+    name: ClipSight Team
+    email: api@clipsight.com
+    url: https://github.com/yourorg/clipsight
+  license:
+    name: AGPL v3
+    url: https://www.gnu.org/licenses/agpl-3.0.en.html
+
+servers:
+  - url: https://api.clipsight.com/v1
+    description: Production API
+  - url: https://staging-api.clipsight.com/v1
+    description: Staging API
+  - url: http://localhost:8080/v1
+    description: Local development (Docker Compose)
+
+tags:
+  - name: Authentication
+    description: User authentication and token management
+  - name: Videos
+    description: Video upload, management, and metadata
+  - name: Search
+    description: Semantic search across video content
+  - name: Tenants
+    description: Multi-tenancy management (admin only)
+  - name: Health
+    description: Service health checks
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+paths:
+  # ============================================
+  # Health Checks (public)
+  # ============================================
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Service health check
+      description: Returns health status of the API service and its dependencies
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: Service unhealthy (dependencies down)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  # ============================================
+  # Authentication Endpoints
+  # ============================================
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: Authenticate with email/password and receive JWT access token
+      security: []  # No auth required
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+
+  /auth/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh access token
+      description: Exchange a valid refresh token for a new access token
+      security: []  # No auth required, but refresh token needed in body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Token refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: Invalid refresh token
+
+  /auth/logout:
+    delete:
+      tags:
+        - Authentication
+      summary: Logout (revoke tokens)
+      description: Revoke the current access and refresh tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Logged out successfully"
+
+  /auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Register new user
+      description: Create a new user account (admin-only or open registration based on config)
+      security: []  # Public registration or admin-only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '409':
+          description: User already exists
+
+  /auth/api-keys:
+    post:
+      tags:
+        - Authentication
+      summary: Generate API key
+      description: Create a new API key for programmatic access (requires authentication)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApiKeyCreateRequest'
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
+
+  /auth/password-reset:
+    post:
+      tags:
+        - Authentication
+      summary: Request password reset
+      description: Initiate password reset flow (sends email in production)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetRequest'
+      responses:
+        '200':
+          description: Reset email sent (or mock in dev)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "If email exists, reset instructions sent"
+
+  /auth/password-reset/confirm:
+    post:
+      tags:
+        - Authentication
+      summary: Confirm password reset
+      description: Complete password reset with token from email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordResetConfirm'
+      responses:
+        '200':
+          description: Password reset successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Password has been reset"
+
+  /auth/oauth/{provider}:
+    get:
+      tags:
+        - Authentication
+      summary: OAuth2 login initiation
+      description: Redirect to OAuth2 provider (Google, GitHub) for authentication
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, github]
+            description: OAuth2 provider
+        - name: redirect_uri
+          in: query
+          schema:
+            type: string
+            description: Post-auth redirect URL
+      security: []
+      responses:
+        '302':
+          description: Redirect to OAuth provider
+          headers:
+            Location:
+              description: OAuth provider authorization URL
+              schema:
+                type: string
+
+  /auth/oauth/{provider}/callback:
+    get:
+      tags:
+        - Authentication
+      summary: OAuth2 callback
+      description: Handle OAuth2 provider callback and issue JWT
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, github]
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+            description: Authorization code from provider
+      responses:
+        '200':
+          description: JWT token returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+
+  # ============================================
+  # Video Upload Endpoints
+  # ============================================
+  /v1/process_video:
+    post:
+      tags:
+        - Videos
+      summary: Upload and process a video
+      description: |
+        Upload a video file for processing. The video will be:
+        1. Stored in MinIO
+        2. Segmented into 30-second chunks
+        3. Frames extracted (1 per second)
+        4. Embeddings generated (CLIP model)
+        5. Indexed in Milvus for search
+
+        Processing happens asynchronously. Poll the video status endpoint to check completion.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Video file (MP4, MOV, AVI, MKV, max 2GB, max 2 hours)
+                tags:
+                  type: string
+                  description: Comma-separated tags for organization (e.g., "traffic,camera1")
+                description:
+                  type: string
+                  description: Human-readable description of the video
+              required:
+                - file
+      responses:
+        '201':
+          description: Video accepted for processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoProcessingResponse'
+        '400':
+          description: Invalid file or parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: File too large
+        '429':
+          description: Upload rate limit exceeded
+
+  /v1/process_rtsp:
+    post:
+      tags:
+        - Videos
+      summary: Start RTSP stream monitoring
+      description: Begin continuous monitoring of an RTSP camera stream. Frames will be extracted periodically and processed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RtspStreamRequest'
+      responses:
+        '201':
+          description: Stream monitoring started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stream_id:
+                    type: string
+                    description: Unique identifier for this stream monitoring job
+                  message:
+                    type: string
+                  extractor_url:
+                    type: string
+                    description: URL of extractor handling this stream
+
+  /v1/videos:
+    get:
+      tags:
+        - Videos
+      summary: List videos
+      description: Retrieve paginated list of videos for the current tenant
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+          description: Page number
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 25
+            maximum: 100
+            minimum: 1
+          description: Items per page
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [processing, ready, error]
+          description: Filter by processing status
+        - name: tag
+          in: query
+          schema:
+            type: string
+          description: Filter by tag
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [uploaded_at, duration, status]
+            default: uploaded_at
+          description: Sort field
+        - name: order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+          description: Sort direction
+      responses:
+        '200':
+          description: List of videos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoListResponse'
+
+  /v1/video/{video_id}:
+    get:
+      tags:
+        - Videos
+      summary: Get video details
+      description: Retrieve detailed information about a specific video including segments
+      parameters:
+        - name: video_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Video details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoDetail'
+        '404':
+          description: Video not found
+
+    delete:
+      tags:
+        - Videos
+      summary: Delete video
+      description: Permanently delete a video and all associated data (frames, embeddings, metadata)
+      parameters:
+        - name: video_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Video deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Video deleted successfully"
+        '404':
+          description: Video not found
+
+  /v1/video/{video_id}/status:
+    get:
+      tags:
+        - Videos
+      summary: Get processing status
+      description: Check if a video has finished processing and is ready for search
+      parameters:
+        - name: video_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Processing status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VideoStatus'
+
+  /v1/video/{video_id}/segments:
+    get:
+      tags:
+        - Videos
+      summary: List video segments
+      description: Get all segments for a video with their processing status
+      parameters:
+        - name: video_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of segments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  video_id:
+                    type: string
+                  segments:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Segment'
+
+  # ============================================
+  # Search Endpoints
+  # ============================================
+  /v1/search:
+    post:
+      tags:
+        - Search
+      summary: Semantic video search
+      description: |
+        Search for frames that match a natural language query using CLIP embeddings.
+
+        The query is encoded as a vector and compared against frame embeddings in Milvus.
+        Results are ranked by cosine similarity.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SearchRequest'
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400':
+          description: Invalid query parameters
+        '429':
+          description: Search rate limit exceeded
+
+  # ============================================
+  # Tenant Management (Admin only)
+  # ============================================
+  /tenants/{tenant_id}:
+    delete:
+      tags:
+        - Tenants
+      summary: Delete tenant
+      description: Permanently delete a tenant and all associated data (GDPR Article 17 right to erasure)
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Tenant deletion initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Tenant deletion in progress"
+
+    put:
+      tags:
+        - Tenants
+      summary: Update tenant configuration
+      description: Modify tenant settings, including enabled plugins
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantUpdate'
+      responses:
+        '200':
+          description: Tenant updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token obtained from /auth/login
+
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for programmatic access (alternative to JWT)
+
+  schemas:
+    # Health
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        service:
+          type: string
+          description: Service name
+        dependencies:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              status:
+                type: string
+                enum: [healthy, unhealthy, unknown]
+              latency_ms:
+                type: integer
+              error:
+                type: string
+
+    # Authentication
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          example: user@example.com
+        password:
+          type: string
+          format: password
+          example: "secure-password-here"
+      required:
+        - email
+        - password
+
+    RefreshRequest:
+      type: object
+      properties:
+        refresh_token:
+          type: string
+          example: "refresh-token-string"
+      required:
+        - refresh_token
+
+    LogoutRequest:
+      type: object
+      properties:
+        refresh_token:
+          type: string
+          example: "refresh-token-to-revoke"
+      required:
+        - refresh_token
+
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+        full_name:
+          type: string
+        tenant_id:
+          type: string
+          description: Tenant identifier (auto-generated if omitted)
+      required:
+        - email
+        - password
+        - full_name
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: JWT access token (use in Authorization header)
+        token_type:
+          type: string
+          enum: [Bearer]
+          example: Bearer
+        expires_in:
+          type: integer
+          description: Token expiry time in seconds
+          example: 3600
+        refresh_token:
+          type: string
+          description: Refresh token for obtaining new access tokens
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "user_abc123"
+        email:
+          type: string
+          format: email
+        full_name:
+          type: string
+        tenant_id:
+          type: string
+        roles:
+          type: array
+          items:
+            type: string
+            enum: [admin, operator, viewer]
+        email_verified:
+          type: boolean
+        mfa_enabled:
+          type: boolean
+
+    UserResponse:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          properties:
+            message:
+              type: string
+
+    ApiKeyCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Human-readable name for the API key
+          example: "CI/CD Pipeline"
+        permissions:
+          type: array
+          items:
+            type: string
+            enum: [read, write, admin]
+          description: Permissions granted to this key
+          default: [read]
+      required:
+        - name
+
+    ApiKeyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        key:
+          type: string
+          description: The API key (shown only once at creation)
+        permissions:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+
+    PasswordResetRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+      required:
+        - email
+
+    PasswordResetConfirm:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Reset token from email
+        new_password:
+          type: string
+          format: password
+      required:
+        - token
+        - new_password
+
+    # Videos
+    VideoProcessingResponse:
+      type: object
+      properties:
+        video_id:
+          type: string
+          example: "vid_1a2b3c4d5e6f"
+        status:
+          type: string
+          enum: [processing, ready, error]
+          example: processing
+        uploaded_at:
+          type: string
+          format: date-time
+        estimated_completion:
+          type: string
+          format: date-time
+        segments_expected:
+          type: integer
+          description: Number of 30-second segments
+        message:
+          type: string
+          example: "Video accepted for processing"
+
+    VideoSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [processing, ready, error]
+        duration_seconds:
+          type: integer
+        frame_count:
+          type: integer
+        thumbnail_url:
+          type: string
+          format: uri
+        uploaded_at:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    VideoListResponse:
+      type: object
+      properties:
+        videos:
+          type: array
+          items:
+            $ref: '#/components/schemas/VideoSummary'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+
+    VideoDetail:
+      allOf:
+        - $ref: '#/components/schemas/VideoSummary'
+        - type: object
+          properties:
+            segments:
+              type: array
+              items:
+                $ref: '#/components/schemas/Segment'
+
+    Segment:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "seg_0001"
+        start_time:
+          type: integer
+          description: Start time in seconds
+        end_time:
+          type: integer
+          description: End time in seconds
+        frame_count:
+          type: integer
+        status:
+          type: string
+          enum: [pending, processing, completed, error]
+
+    VideoStatus:
+      type: object
+      properties:
+        video_id:
+          type: string
+        status:
+          type: string
+          enum: [processing, ready, error]
+        progress_percent:
+          type: number
+          minimum: 0
+          maximum: 100
+        segments_processed:
+          type: integer
+        total_segments:
+          type: integer
+        estimated_completion:
+          type: string
+          format: date-time
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+        pages:
+          type: integer
+
+    # Search
+    SearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Natural language search query
+          example: "red pickup truck"
+        video_id:
+          type: string
+          description: "Optional: limit search to specific video"
+        tenant_id:
+          type: string
+          description: Override tenant (admin only)
+        top_k:
+          type: integer
+          description: Number of results to return
+          minimum: 1
+          maximum: 100
+          default: 10
+        min_similarity:
+          type: number
+          description: Minimum similarity threshold (0-1)
+          minimum: 0
+          maximum: 1
+          default: 0.7
+        date_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date
+            end:
+              type: string
+              format: date
+      required:
+        - query
+      example:
+        query: "person wearing hard hat"
+        top_k: 20
+        min_similarity: 0.7
+
+    SearchResult:
+      type: object
+      properties:
+        frame_id:
+          type: string
+          example: "frame_00123"
+        video_id:
+          type: string
+        timestamp_seconds:
+          type: number
+          format: float
+        timestamp_formatted:
+          type: string
+          description: Human-readable timestamp (HH:MM:SS)
+        similarity:
+          type: number
+          format: float
+          description: Cosine similarity (0-1)
+          minimum: 0
+          maximum: 1
+        thumbnail_url:
+          type: string
+          format: uri
+        video_url:
+          type: string
+          format: uri
+        segment_id:
+          type: string
+
+    SearchResponse:
+      type: object
+      properties:
+        query:
+          type: string
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchResult'
+        total_results:
+          type: integer
+        query_time_ms:
+          type: integer
+          description: Time taken to execute search
+
+    # Tenants
+    TenantUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        enabled_plugins:
+          type: array
+          items:
+            type: string
+          description: List of plugin IDs to enable
+        settings:
+          type: object
+          additionalProperties: true
+          description: JSON configuration for tenant
+
+    TenantResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        enabled_plugins:
+          type: array
+          items:
+            type: string
+        settings:
+          type: object
+
+    # RTSP
+    RtspStreamRequest:
+      type: object
+      properties:
+        rtsp_url:
+          type: string
+          format: uri
+          description: RTSP stream URL (e.g., rtsp://user:pass@camera:554/stream)
+        camera_id:
+          type: string
+          description: Optional identifier for this camera
+        tags:
+          type: string
+          description: Comma-separated tags
+      required:
+        - rtsp_url
+
+    # Errors
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code
+          example: invalid_token
+        message:
+          type: string
+          description: Human-readable error message
+        request_id:
+          type: string
+          description: Correlation ID for debugging
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional error context
+
+  # Reusable responses
+  responses:
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+      headers:
+        WWW-Authenticate:
+          description: Challenge for authentication
+          schema:
+            type: string
+            example: Bearer realm="clipsight-api"
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        X-RateLimit-Limit:
+          description: Request limit per time window
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          description: Remaining requests in current window
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          description: Time when rate limit resets (Unix timestamp)
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

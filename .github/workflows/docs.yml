@@ -1,0 +1,78 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for mike
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install documentation dependencies
+        run: |
+          pip install mkdocs
+          pip install mkdocs-material
+          pip install mkdocs-openapi-plugin
+          pip install mike
+
+      - name: Verify documentation structure
+        run: |
+          echo "Checking for required directories..."
+          test -d docs && echo "✓ docs/ exists"
+          test -d docs/api && echo "✓ docs/api/ exists"
+          test -f docs/api/openapi.yaml && echo "✓ openapi.yaml exists"
+
+      - name: Build documentation
+        run: |
+          mkdocs build --strict --verbose
+
+      - name: Deploy to GitHub Pages with mike
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure git identity for mike
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          # Deploy 'latest' version
+          mike deploy --push --allow-empty latest
+
+          # Set 'latest' as the default version (root redirects to /en/latest/)
+          mike set-default --push latest
+
+          echo "✓ Documentation deployed to https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+
+      - name: Upload build artifact (for PR previews)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-site
+          path: site/
+
+  # Optional: Deployment for PR previews (requires additional setup with https://github.com/rossjrw/pr-preview-action)
+  # preview:
+  #   if: github.event_name == 'pull_request'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '3.11'
+  #     - run: pip install mkdocs mkdocs-material mkdocs-openapi-plugin
+  #     - run: mkdocs build
+  #     - uses: rossjrw/pr-preview-action@v1
+  #       with:
+  #         source-dir: ./site

@@ -163,12 +163,31 @@ Each task has:
 
 ---
 
-### Phase 3: Subscription & Billing (Months 5-6)
+### Phase 3: Documentation & Developer Experience (Month 3)
 
-#### Area 3.1: Tenant Management Portal
-...
+#### Area 3.1: Public Documentation Site
+**Dependencies**: T1.1.1-T1.1.6, T1.5.1-T1.5.7 (core architecture complete)
+**Estimated**: 40 hours
+
+| Task | Description | Acceptance Criteria | Tests | Files |
+|------|-------------|-------------------|-------|-------|
+| T3.1.1 | Set up MkDocs with Material theme | `mkdocs serve` works locally, clean UI | Manual: site builds without errors | `mkdocs.yml`, `docs/` structure |
+| T3.1.2 | Create product marketing landing page | Professional homepage explaining ClipSight value prop | Visual review: landing page looks polished | `docs/index.md` |
+| T3.1.3 | Write quickstart guide (5-min eval) | User can deploy Docker Compose and search first video in <10 min | Test by non-dev colleague can complete | `docs/quickstart.md` |
+| T3.1.4 | Write installation guide (Docker vs K8s) | Clear steps for both on-premise and cloud deployments | Follow along with fresh install | `docs/installation/docker-compose.md`, `docs/installation/kubernetes.md` |
+| T3.1.5 | Write user guide (UI walkthrough, API) | Covers upload, search, results interpretation | All features documented with screenshots | `docs/user-guide/` |
+| T3.1.6 | Write operations guide (monitoring, backup, troubleshooting) | Ops can monitor health, backup DB, restore | Include Prometheus alerts, Grafana dashboards | `docs/operations/` |
+| T3.1.7 | Create architecture diagrams | High-level component diagram, data flow, security model | Diagrams in `docs/assets/diagrams/` | `docs/architecture/diagrams.md` |
+| T3.1.8 | Generate API reference from OpenAPI | Auto-generated API docs with examples | `mkdocs.yml` includes `mkdocs-openapi-plugin` | `docs/api/` |
+| T3.1.9 | Deploy documentation to GitHub Pages | Site live at `https://username.github.io/clipsight` | Automated via `mkdocs gh-deploy` in CI | GitHub Actions workflow |
+| T3.1.10 | Add versioned documentation support | v1.0, v1.1, latest, stable navigation | `mkdocs-versions` plugin configured | `docs/` + CI config |
 
 ---
+
+### Phase 4: Subscription & Billing (Months 5-6)
+
+#### Area 4.1: Tenant Management Portal
+...
 
 ## Total Estimated Hours: ~1,200 hours (60 weeks @ 20h/week)
 
