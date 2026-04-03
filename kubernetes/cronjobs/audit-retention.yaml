@@ -1,0 +1,189 @@
+# T1.5.7: Audit log retention CronJob
+# Runs daily to archive old audit logs to S3 cold storage
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: audit-retention
+  namespace: clipsight
+  labels:
+    app: audit-retention
+    component: retention
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: audit-retention
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: archive
+            image: python:3.11-slim
+            command: ["/bin/sh", "-c"]
+            args: ["pip install --no-cache-dir psycopg2-binary boto3 && python /scripts/archive_audit_logs.py"]
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: audit-secrets
+                  key: database-url
+            - name: S3_BUCKET
+              value: "clipsight-audit-archive"
+            - name: S3_PREFIX
+              value: "audit-logs"
+            - name: ARCHIVE_AFTER_DAYS
+              value: "90"
+            - name: CHUNK_SIZE
+              value: "1000"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: audit-s3-credentials
+                  key: access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: audit-s3-credentials
+                  key: secret-access-key
+            - name: AWS_REGION
+              value: "us-east-1"
+            volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+          volumes:
+          - name: scripts
+            configMap:
+              name: audit-retention-script
+              defaultMode: 0755
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-retention-script
+  namespace: clipsight
+data:
+  archive_audit_logs.py: |
+    #!/usr/bin/env python3
+    # (Script content inlined - see scripts/retention/archive_audit_logs.py)
+    import os, sys, json, gzip, logging, io
+    from datetime import datetime, timedelta
+    import psycopg2
+    from psycopg2.extras import DictCursor
+    import boto3
+    from botocore.exceptions import ClientError
+
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    logger = logging.getLogger(__name__)
+
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    S3_BUCKET = os.getenv("S3_BUCKET", "clipsight-audit-archive")
+    S3_PREFIX = os.getenv("S3_PREFIX", "audit-logs")
+    ARCHIVE_AFTER_DAYS = int(os.getenv("ARCHIVE_AFTER_DAYS", "90"))
+    CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
+    STORAGE_CLASS = os.getenv("S3_STORAGE_CLASS", "GLACIER")
+
+    def connect_db():
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = False
+        logger.info("Connected to PostgreSQL")
+        return conn
+
+    def connect_s3():
+        session = boto3.Session()
+        return session.client('s3')
+
+    def fetch_old_logs(conn, cutoff_date):
+        query = """
+            SELECT id, tenant_id, user_id, action, resource_type, resource_id, resource_name,
+                   timestamp, outcome, ip_address, user_agent, request_id, changes, error_message, metadata,
+                   created_at
+            FROM audit_logs
+            WHERE timestamp < %s
+            ORDER BY timestamp ASC
+            FOR UPDATE SKIP LOCKED
+        """
+        cursor = conn.cursor(cursor_factory=DictCursor)
+        cursor.execute(query, (cutoff_date,))
+        while True:
+            rows = cursor.fetchmany(CHUNK_SIZE)
+            if not rows:
+                break
+            yield rows
+        cursor.close()
+
+    def archive_chunk_to_s3(s3, chunk, chunk_num):
+        now = datetime.utcnow()
+        key = f"{S3_PREFIX}/{now:%Y/%m}/archive_{now:%Y%m%d_%H%M%S}_chunk{chunk_num}.json.gz"
+        lines = []
+        for row in chunk:
+            log_entry = dict(row)
+            for k, v in log_entry.items():
+                if isinstance(v, datetime):
+                    log_entry[k] = v.isoformat()
+            lines.append(json.dumps(log_entry, default=str))
+        payload = "\n".join(lines).encode('utf-8')
+        gz_buffer = io.BytesIO()
+        with gzip.GzipFile(fileobj=gz_buffer, mode='wb') as gz:
+            gz.write(payload)
+        gz_buffer.seek(0)
+        s3.put_object(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Body=gz_buffer,
+            ContentType='application/json',
+            ContentEncoding='gzip',
+            StorageClass=STORAGE_CLASS
+        )
+        logger.info(f"Uploaded chunk {chunk_num} ({len(chunk)} rows) to s3://{S3_BUCKET}/{key}")
+        return key
+
+    def delete_archived_logs(conn, ids):
+        with conn.cursor() as cur:
+            for i in range(0, len(ids), CHUNK_SIZE):
+                batch = ids[i:i+CHUNK_SIZE]
+                cur.execute("DELETE FROM audit_logs WHERE id = ANY(%s)", (batch,))
+            conn.commit()
+        logger.info(f"Deleted {len(ids)} archived logs from database")
+
+    def main():
+        logger.info("Starting audit log archival...")
+        conn = connect_db()
+        s3 = connect_s3()
+        cutoff_date = datetime.utcnow() - timedelta(days=ARCHIVE_AFTER_DAYS)
+        logger.info(f"Archiving logs older than {cutoff_date}")
+        total_archived = 0
+        chunk_num = 0
+        try:
+            for chunk in fetch_old_logs(conn, cutoff_date):
+                chunk_num += 1
+                if not chunk:
+                    break
+                ids = [row['id'] for row in chunk]
+                archive_chunk_to_s3(s3, chunk, chunk_num)
+                delete_archived_logs(conn, ids)
+                total_archived += len(chunk)
+                logger.info(f"Progress: archived {total_archived} rows")
+            logger.info(f"Archival complete: {total_archived} logs archived")
+            return 0
+        except Exception:
+            logger.exception("Archival failed")
+            conn.rollback()
+            return 1
+        finally:
+            conn.close()
+
+    if __name__ == "__main__":
+        sys.exit(main())
