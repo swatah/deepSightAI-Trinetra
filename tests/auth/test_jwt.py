@@ -37,7 +37,6 @@ def test_db():
     Base.metadata.create_all(bind=engine)
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-    # Override get_db
     def override_get_db():
         db = TestingSessionLocal()
         try:
@@ -46,6 +45,12 @@ def test_db():
             db.close()
 
     app.dependency_overrides[get_db] = override_get_db
+
+    # Save original keys to restore later
+    import auth_service
+    original_private = getattr(auth_service, 'PRIVATE_KEY', None)
+    original_public = getattr(auth_service, 'PUBLIC_KEY', None)
+    original_algorithm = getattr(auth_service, 'ALGORITHM', None)
 
     # Generate RSA key pair for RS256 and serialize to PEM
     private_key = rsa.generate_private_key(
@@ -63,12 +68,19 @@ def test_db():
     )
 
     # Store in module for token creation/verification
-    import auth_service
     auth_service.PRIVATE_KEY = private_pem
     auth_service.PUBLIC_KEY = public_pem
     auth_service.ALGORITHM = "RS256"
 
     yield TestingSessionLocal
+
+    # Restore original keys
+    if original_private is not None:
+        auth_service.PRIVATE_KEY = original_private
+    if original_public is not None:
+        auth_service.PUBLIC_KEY = original_public
+    if original_algorithm is not None:
+        auth_service.ALGORITHM = original_algorithm
 
     Base.metadata.drop_all(bind=engine)
     app.dependency_overrides.clear()

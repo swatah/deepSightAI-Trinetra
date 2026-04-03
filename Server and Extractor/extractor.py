@@ -7,7 +7,7 @@ import sys
 import tempfile
 import time
 import traceback
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Depends
 from pydantic import BaseModel
 from minio import Minio
 from minio.error import S3Error
@@ -212,7 +212,19 @@ def run_rtsp_extraction_job(rtsp_url: str):
         print(f"[{EXTRACTOR_ID}] RTSP job for {rtsp_url} has concluded.")
 
 # --- FASTAPI APPLICATION SETUP ---
-app = FastAPI(title="Extractor Service")
+# --- AUTH DEPENDENCY ---
+try:
+    from shared.middleware import require_auth
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    def require_auth():
+        return {}
+
+app = FastAPI(
+    title="Extractor Service",
+    dependencies=[Depends(require_auth)] if AUTH_AVAILABLE else []
+)
 
 @app.on_event("startup")
 def on_startup():

@@ -43,6 +43,10 @@ def test_db(tmp_path):
 
     app.dependency_overrides[get_db] = override_get_db
 
+    # Save original PUBLIC_KEY to restore later
+    import auth_service
+    original_public_key = auth_service.PUBLIC_KEY
+
     # Generate RSA keys
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private_pem = private_key.private_bytes(
@@ -57,7 +61,6 @@ def test_db(tmp_path):
     set_jwt_public_key(public_pem)
 
     # Override auth_service's PUBLIC_KEY so its decode_token uses this key
-    import auth_service
     auth_service.PUBLIC_KEY = public_pem
 
     # Create tenant and user
@@ -101,6 +104,8 @@ def test_db(tmp_path):
 
     yield TestingSessionLocal
 
+    # Cleanup: restore original PUBLIC_KEY
+    auth_service.PUBLIC_KEY = original_public_key
     app.dependency_overrides.clear()
     engine.dispose()
 

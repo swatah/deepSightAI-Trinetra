@@ -4,7 +4,7 @@ import ffmpeg
 import asyncio
 import os
 import tempfile
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from minio import Minio
 from datetime import datetime
@@ -24,8 +24,21 @@ class VideoSourceRequest(BaseModel):
 class RtspSourceRequest(BaseModel):
     rtsp_url: str
 
+# --- AUTH DEPENDENCY ---
+try:
+    from shared.middleware import require_auth
+    AUTH_AVAILABLE = True
+except ImportError:
+    # Shared middleware not available; skip auth (development only)
+    AUTH_AVAILABLE = False
+    def require_auth():
+        return {}
+
 # --- FASTAPI APP INITIALIZATION ---
-app = FastAPI(title="Input Source Router")
+app = FastAPI(
+    title="Input Source Router",
+    dependencies=[Depends(require_auth)] if AUTH_AVAILABLE else []
+)
 
 # --- HELPER FUNCTIONS ---
 def fetch_video_from_minio(object_key: str) -> str:

@@ -11,16 +11,18 @@ import os
 import json
 import secrets
 import string
+import hashlib
+import httpx
+import urllib.parse
 from datetime import datetime, timedelta
 from typing import Optional, List
 
-from fastapi import FastAPI, Depends, HTTPException, Request, status
+from fastapi import FastAPI, Depends, HTTPException, Request, status, BackgroundTasks
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, ForeignKey, create_engine
-)
-from sqlalchemy.ext.declarative import declarative_base
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, create_engine
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 
 from passlib.context import CryptContext
@@ -63,17 +65,57 @@ def _generate_rsa_keys():
 PRIVATE_KEY, PUBLIC_KEY = _generate_rsa_keys()
 
 # ============================================================================
+# OAuth2 Configuration (Social Login - optional)
+# ============================================================================
+oauth_clients = {
+    "google": {
+        "client_id": os.getenv("GOOGLE_CLIENT_ID", "test-google-client"),
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", "test-google-secret"),
+        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "userinfo_url": "https://openidconnect.googleapis.com/v1/userinfo",
+        "scope": "openid email profile"
+    },
+    "github": {
+        "client_id": os.getenv("GITHUB_CLIENT_ID", "test-github-client"),
+        "client_secret": os.getenv("GITHUB_CLIENT_SECRET", "test-github-secret"),
+        "auth_url": "https://github.com/login/oauth/authorize",
+        "token_url": "https://github.com/login/oauth/access_token",
+        "userinfo_url": "https://api.github.com/user",
+        "scope": "read:user user:email"
+    }
+}
+
+# Placeholder for mock provider (used in tests)
+mock_provider = None
+
+# ============================================================================
 # Database Setup
 # ============================================================================
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Engine and SessionLocal will be initialized lazily on first use
+_engine = None
+_SessionLocal = None
+
+
+def init_db(database_url=None):
+    """Initialize database engine and session factory. Called explicitly in production, or by tests to override."""
+    global _engine, _SessionLocal
+    url = database_url or DATABASE_URL
+    _engine = create_engine(url)
+    _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
+    # Create tables (development only; use Alembic in production)
+    Base.metadata.create_all(bind=_engine)
 
 
 def get_db():
     """Dependency for database session."""
-    db = SessionLocal()
+    if _SessionLocal is None:
+        # Auto-initialize with default DATABASE_URL if not explicitly initialized
+        init_db()
+    db = _SessionLocal()
     try:
         yield db
     finally:
@@ -171,8 +213,16 @@ class UserRole(Base):
     assigned_at = Column(DateTime, default=datetime.utcnow)
 
 
-# Create tables if they don't exist (development only; use Alembic in production)
-Base.metadata.create_all(bind=engine)
+class PasswordResetToken(Base):
+    """Password reset tokens for user-initiated password changes."""
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(String(255), nullable=False)  # SHA256 hash of the plain token
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # ============================================================================
@@ -181,6 +231,42 @@ Base.metadata.create_all(bind=engine)
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+# OAuth2 configuration (optional - for social login)
+# Use environment variables in production: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc.
+OAUTH_CLIENTS = {
+    "google": {
+        "client_id": os.getenv("GOOGLE_CLIENT_ID", "test-google-client"),
+        "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", "test-google-secret"),
+        "auth_url": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_url": "https://oauth2.googleapis.com/token",
+        "userinfo_url": "https://openidconnect.googleapis.com/v1/userinfo",
+        "scope": "openid email profile"
+    },
+    "github": {
+        "client_id": os.getenv("GITHUB_CLIENT_ID", "test-github-client"),
+        "client_secret": os.getenv("GITHUB_CLIENT_SECRET", "test-github-secret"),
+        "auth_url": "https://github.com/login/oauth/authorize",
+        "token_url": "https://github.com/login/oauth/access_token",
+        "userinfo_url": "https://api.github.com/user",
+        "scope": "read:user user:email"
+    }
+}
+
+# Placeholder for mock provider (used in tests)
+mock_provider = None
+
+
+class EmailSender:
+    """Email sender abstraction. Override for testing."""
+    def send_password_reset_email(self, to_email: str, reset_token: str):
+        """Send a password reset email. In production, implement actual email sending."""
+        # For development, log to console.
+        print(f"[Email] Password reset link for {to_email}: token={reset_token}")
+
+
+# Global email sender instance (can be overridden in tests)
+email_sender = EmailSender()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -221,13 +307,12 @@ class UserCreate(BaseModel):
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     email: str
     full_name: str
     email_verified: bool
-
-    class Config:
-        from_attributes = True
 
 
 class Token(BaseModel):
@@ -258,6 +343,15 @@ class APIKeyResponse(BaseModel):
     name: str
     permissions: List[str]
     expires_at: datetime
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr = Field(..., description="Email address of the account to reset")
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(..., description="Password reset token")
+    new_password: str = Field(..., min_length=8, description="New password")
 
 
 # ============================================================================
@@ -467,13 +561,205 @@ def create_api_key(
     )
 
 
+@app.post("/auth/password-reset")
+def request_password_reset(
+    data: PasswordResetRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Initiate a password reset flow.
+
+    - Looks up user by email.
+    - If user exists, generates a one-time reset token and sends email.
+    - Returns 200 regardless to avoid email enumeration (security).
+    """
+    # Look for user
+    user = db.query(User).filter(User.email == data.email).first()
+    if user:
+        # Generate a random token
+        plain_token = secrets.token_urlsafe(32)
+        # Hash it with SHA256 for storage
+        token_hash = hashlib.sha256(plain_token.encode()).hexdigest()
+        # Create token record, expires in 1 hour
+        expires = datetime.utcnow() + timedelta(hours=1)
+        reset_token = PasswordResetToken(
+            user_id=user.id,
+            token_hash=token_hash,
+            expires_at=expires,
+            used_at=None
+        )
+        db.add(reset_token)
+        db.commit()
+        # Send email (could be background task to not block response)
+        try:
+            email_sender.send_password_reset_email(user.email, plain_token)
+        except Exception as e:
+            # Log but don't fail; user still gets success response
+            print(f"Error sending password reset email: {e}")
+    # Always return the same message regardless of user existence
+    return {"message": "If an account exists with that email, a password reset email has been sent."}
+
+
+@app.post("/auth/password-reset/confirm")
+def confirm_password_reset(
+    data: PasswordResetConfirm,
+    db: Session = Depends(get_db)
+):
+    """
+    Complete the password reset using the token sent via email.
+
+    - Verifies the token matches a stored, unexpired, unused reset token.
+    - If valid, updates the user's password.
+    - Marks the token as used.
+    """
+    # Compute hash of provided token
+    token_hash = hashlib.sha256(data.token.encode()).hexdigest()
+    # Find a matching unused, non-expired token
+    reset_token = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token_hash == token_hash,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.expires_at > datetime.utcnow()
+    ).first()
+    if not reset_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token"
+        )
+    # Get user
+    user = db.query(User).filter(User.id == reset_token.user_id).first()
+    if not user:
+        # This should not happen if referential integrity is enforced, but handle gracefully
+        raise HTTPException(status_code=404, detail="User not found for reset token")
+    # Update password
+    user.password_hash = get_password_hash(data.new_password)
+    # Mark token as used
+    reset_token.used_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Password has been reset successfully."}
+
+
+# ============================================================================
+# OAuth2 Social Login (Google, GitHub - optional)
+# ============================================================================
+
+@app.get("/auth/oauth/{provider}")
+async def oauth_login(provider: str, request: Request):
+    """
+    Initiate OAuth2 flow by redirecting to the provider's authorization page.
+    Supported providers: google, github.
+    """
+    if provider not in oauth_clients:
+        raise HTTPException(status_code=404, detail=f"Unsupported OAuth provider: {provider}")
+    config = oauth_clients[provider]
+    state = secrets.token_urlsafe(16)
+    redirect_uri = request.url_for("oauth_callback", provider=provider)
+    params = {
+        "client_id": config["client_id"],
+        "redirect_uri": str(redirect_uri),
+        "response_type": "code",
+        "scope": config["scope"],
+        "state": state,
+        "access_type": "offline",
+        "prompt": "consent"
+    }
+    auth_url = f"{config['auth_url']}?{urllib.parse.urlencode(params)}"
+    if mock_provider is not None:
+        auth_url = mock_provider.get_authorization_url(
+            client_id=config["client_id"],
+            redirect_uri=str(redirect_uri),
+            state=state
+        )
+    return RedirectResponse(auth_url, status_code=302)
+
+
+@app.get("/auth/oauth/{provider}/callback")
+async def oauth_callback(provider: str, request: Request, db: Session = Depends(get_db)):
+    """
+    OAuth2 callback: exchange authorization code for tokens, fetch user info,
+    create local user account if needed, and return a JWT.
+    """
+    if provider not in oauth_clients:
+        raise HTTPException(status_code=404, detail=f"Unsupported OAuth provider: {provider}")
+    config = oauth_clients[provider]
+    code = request.query_params.get("code")
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing code parameter")
+    redirect_uri = request.url_for("oauth_callback", provider=provider)
+
+    try:
+        if mock_provider is not None:
+            token_data = mock_provider.exchange_code_for_token(
+                code=code,
+                client_secret=config["client_secret"],
+                redirect_uri=str(redirect_uri)
+            )
+            email = token_data.get("email")
+            full_name = token_data.get("name")
+        else:
+            # Exchange code for access token with provider
+            token_resp_data = {
+                "client_id": config["client_id"],
+                "client_secret": config["client_secret"],
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": str(redirect_uri)
+            }
+            headers = {"Accept": "application/json"}
+            async with httpx.AsyncClient() as client:
+                token_exchange = await client.post(config["token_url"], data=token_resp_data, headers=headers, timeout=30.0)
+                if token_exchange.status_code != 200:
+                    raise HTTPException(status_code=400, detail="OAuth token exchange failed")
+                token_json = token_exchange.json()
+                access_token = token_json.get("access_token")
+                if not access_token:
+                    raise HTTPException(status_code=400, detail="No access token returned")
+                # Fetch user info from provider
+                userinfo_resp = await client.get(
+                    config["userinfo_url"],
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=30.0
+                )
+                if userinfo_resp.status_code != 200:
+                    raise HTTPException(status_code=400, detail="Failed to fetch user info")
+                userinfo = userinfo_resp.json()
+                email = userinfo.get("email")
+                full_name = userinfo.get("name") or userinfo.get("login")
+                if not email:
+                    raise HTTPException(status_code=400, detail="OAuth provider did not return an email")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"OAuth error: {str(e)}") from e
+
+    # Find or create user
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        user = User(
+            email=email,
+            full_name=full_name or "OAuth User",
+            password_hash=get_password_hash(secrets.token_urlsafe(32)),
+            email_verified=True
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    # Issue JWT
+    token = create_access_token(data={
+        "sub": str(user.id),
+        "email": user.email,
+        "tenant_id": None,
+        "roles": []
+    })
+    return Token(access_token=token, token_type="bearer")
+
+
 # TODO: Implement additional endpoints:
 # - /auth/logout (token revocation)
-# - /auth/password-reset
 # - /auth/refresh (refresh tokens)
 # - /auth/me (user profile)
 
 
 if __name__ == "__main__":
+    # Initialize database when run as script (production/dev server)
+    init_db()
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
