@@ -1,0 +1,91 @@
+---
+# Pod Security Standard: Restricted (Kyverno Policy)
+# T1.4.7: Enforce pod security standards
+
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pod-security-restricted
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    # Rule 1: Require runAsNonRoot
+    - name: require-run-as-non-root
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "Pods must run as non-root"
+        pattern:
+          spec:
+            ^(securityContext):
+              =(runAsNonRoot): true
+    # Rule 2: Require readOnlyRootFilesystem
+    - name: require-read-only-root-filesystem
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "Containers must have read-only root filesystem"
+        pattern:
+          spec:
+            containers:
+              =(securityContext):
+                =(readOnlyRootFilesystem): true
+    # Rule 3: Drop all capabilities
+    - name: drop-all-capabilities
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "Containers must drop all capabilities"
+        pattern:
+          spec:
+            containers:
+              =(securityContext):
+                =(capabilities):
+                  drop:
+                  - ALL
+    # Rule 4: Disallow privileged escalation
+    - name: disallow-privilege-escalation
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "Containers must not allow privilege escalation"
+        pattern:
+          spec:
+            containers:
+              =(securityContext):
+                =(allowPrivilegeEscalation): false
+    # Rule 5: Disallow privileged pods
+    - name: disallow-privileged-pod
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "Privileged pods are not allowed"
+        pattern:
+          spec:
+            =(privileged): false
+    # Rule 6: Ensure seccompProfile is set to RuntimeDefault or Strict (if supported)
+    - name: require-seccomp-profile
+      match:
+        resources:
+          kinds:
+            - Pod
+      validate:
+        message: "Pods must define a seccomp profile (runtime/default or localhost/<profile>)"
+        pattern:
+          spec:
+            containers:
+              =(securityContext):
+                =(seccompProfile):
+                  type: "RuntimeDefault"  # or "Localhost"
+    # Rule 7: Ensure AppArmor or Seccomp is used (optional)
