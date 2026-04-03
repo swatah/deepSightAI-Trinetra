@@ -87,8 +87,8 @@ def publish_frame_ready_event(video_id: str, segment_id: int, frame_paths: list,
             bucket_name=bucket_name,
             timestamp=datetime.utcnow()
         )
-        # Publish to frames:{video_id} stream (design says one stream per video)
-        stream_name = f"frames:{video_id}"
+        # Publish to central frames stream
+        stream_name = "frames"
         producer = get_producer()
         producer.publish(stream_name, event)
         print(f"[{EXTRACTOR_ID}] Published FrameReadyEvent to {stream_name} for video {video_id}, segment {segment_id}")

@@ -85,7 +85,7 @@ class TestPublishFrameReadyEvent:
         args = mock_producer.publish.call_args[0]
         stream_name = args[0]
         event = args[1]
-        assert stream_name == "frames:video-123"
+        assert stream_name == "frames"
         assert event.video_id == "video-123"
         assert event.segment_id == 0
         assert event.frame_paths == ["frames/video-123/seg_0000/f1.jpg"]
