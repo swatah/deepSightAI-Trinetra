@@ -49,28 +49,34 @@ class PluginLoader:
             Dictionary mapping plugin names to plugin classes.
         """
         plugins_package = "Embedder.models.plugins"
-        package_dir = Path(__file__).parent
+        package_dir = Path(__file__).parent / "plugins"
 
         discovered = {}
 
-        # Iterate over Python files in the plugins package directory
-        for file_path in package_dir.iterdir():
-            if file_path.suffix == ".py" and file_path.name != "__init__.py" and file_path.name != "base.py":
-                module_name = file_path.stem
-                full_module_name = f"{plugins_package}.{module_name}"
-                try:
-                    module = importlib.import_module(full_module_name)
-                except ImportError as e:
-                    # Log warning but continue discovery
-                    print(f"[PluginLoader] Failed to import {full_module_name}: {e}")
-                    continue
+        # Recursively iterate over all Python files in the plugins package
+        for file_path in package_dir.rglob("*.py"):
+            # Skip __init__.py and base.py
+            if file_path.name == "__init__.py" or file_path.name == "base.py":
+                continue
 
-                # Find classes that are subclasses of DetectionPlugin (but not DetectionPlugin itself)
-                for name, obj in inspect.getmembers(module, inspect.isclass):
-                    if issubclass(obj, DetectionPlugin) and obj is not DetectionPlugin:
-                        # Use plugin's 'name' attribute or the module name
-                        plugin_name = getattr(obj, "name", module_name)
-                        discovered[plugin_name] = obj
+            # Compute module name relative to plugins package
+            relative_path = file_path.relative_to(package_dir)
+            module_name = ".".join(relative_path.with_suffix("").parts)
+            full_module_name = f"{plugins_package}.{module_name}"
+
+            try:
+                module = importlib.import_module(full_module_name)
+            except ImportError as e:
+                # Log warning but continue discovery
+                print(f"[PluginLoader] Failed to import {full_module_name}: {e}")
+                continue
+
+            # Find classes that are subclasses of DetectionPlugin (but not DetectionPlugin itself)
+            for name, obj in inspect.getmembers(module, inspect.isclass):
+                if issubclass(obj, DetectionPlugin) and obj is not DetectionPlugin:
+                    # Use plugin's 'name' attribute
+                    plugin_name = getattr(obj, "name", name.lower())
+                    discovered[plugin_name] = obj
 
         return discovered
 

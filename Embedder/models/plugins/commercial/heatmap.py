@@ -59,15 +59,17 @@ class HeatmapPlugin(DetectionPlugin):
         # Compute cell coordinates for each activity pixel
         ys, xs = np.where(activity_mask)
         if len(xs) == 0:
-            # Still need to possibly decay?
-            # For now, just return empty
             return []
 
+        # Map to grid cells
         cell_x = (xs * grid_w // w).astype(int)
         cell_y = (ys * grid_h // h).astype(int)
-        # Accumulate counts per cell
-        for cx, cy in zip(cell_x, cell_y):
-            self.heatmap[cy, cx] += 1
+
+        # Fast linear bin count (1D bincount with reshaping)
+        # Compute linear index: row * grid_w + col
+        indices = cell_y * grid_w + cell_x
+        counts = np.bincount(indices, minlength=grid_h * grid_w)
+        self.heatmap += counts.reshape(grid_h, grid_w)
 
         # For queue detection: count activity per column (in grid col)
         active_cols = set(cell_x)
