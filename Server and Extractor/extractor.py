@@ -7,12 +7,15 @@ import sys
 import tempfile
 import time
 import traceback
+from datetime import datetime
 from fastapi import FastAPI, BackgroundTasks, Depends
 from pydantic import BaseModel
 from minio import Minio
 from minio.error import S3Error
 import signal
 import threading
+from shared.streaming.producer import StreamProducer
+from shared.streaming.schema import FrameReadyEvent
 
 # --- GStreamer and GObject Imports ---
 gi.require_version('Gst', '1.0')
@@ -28,6 +31,7 @@ MINIO_ACCESS_KEY = "minioadmin"
 MINIO_SECRET_KEY = "minioadmin"
 VIDEO_BUCKET = "videos"
 FRAME_BUCKET = "frames"  # Used for file jobs
+CONTROL_STREAM = "control:ingest"  # For publishing events; will also have frames:{video_id} later but we use control for now per design? Actually design says frames go to frames:{video_id}. We'll use that.
 
 # --- Graceful Shutdown Event ---
 # This event will be set by the main thread's signal handler
@@ -41,6 +45,56 @@ def ensure_bucket(minio_client, bucket_name):
     except S3Error as err:
         if err.code != "BucketAlreadyOwnedByYou":
             raise
+
+
+# --- EVENT PUBLISHING ---
+_producer = None
+
+
+def get_producer() -> StreamProducer:
+    """Lazy singleton for StreamProducer."""
+    global _producer
+    if _producer is None:
+        _producer = StreamProducer()
+    return _producer
+
+
+def publish_frame_ready_event(video_id: str, segment_id: int, frame_paths: list,
+                               timestamps: list, sequence_numbers: list,
+                               bucket_name: str = None):
+    """
+    Publish FrameReadyEvent to Redis Streams.
+
+    Args:
+        video_id: Video identifier
+        segment_id: Segment number (0 for RTSP)
+        frame_paths: List of MinIO object paths for frames
+        timestamps: List of frame timestamps (seconds from video start)
+        sequence_numbers: List of sequence numbers within segment
+        bucket_name: Optional bucket name; defaults to FRAME_BUCKET
+    """
+    if bucket_name is None:
+        bucket_name = FRAME_BUCKET
+
+    try:
+        event = FrameReadyEvent(
+            video_id=video_id,
+            segment_id=segment_id,
+            frame_paths=frame_paths,
+            timestamps=timestamps,
+            sequence_numbers=sequence_numbers,
+            extractor_id=EXTRACTOR_ID,
+            bucket_name=bucket_name,
+            timestamp=datetime.utcnow()
+        )
+        # Publish to frames:{video_id} stream (design says one stream per video)
+        stream_name = f"frames:{video_id}"
+        producer = get_producer()
+        producer.publish(stream_name, event)
+        print(f"[{EXTRACTOR_ID}] Published FrameReadyEvent to {stream_name} for video {video_id}, segment {segment_id}")
+    except Exception as e:
+        print(f"[{EXTRACTOR_ID}] Failed to publish FrameReadyEvent: {e}")
+        # Don't raise - best effort
 
 # --- CLASS FOR VIDEO FILE EXTRACTION (UNCHANGED) ---
 class GStreamerFileExtractor:
@@ -69,12 +123,14 @@ class GStreamerRtspExtractor:
     Connects to an RTSP stream, captures frames, and uploads them to Minio.
     It checks a threading.Event to know when to shut down gracefully.
     """
-    def __init__(self, rtsp_url, minio_client, bucket_name):
+    def __init__(self, rtsp_url: str, video_id: str, minio_client, bucket_name: str):
         self.rtsp_url = rtsp_url
+        self.video_id = video_id
         self.minio_client = minio_client
         self.bucket_name = bucket_name
         self.loop = GLib.MainLoop()
         self.pipeline = None
+        self.sequence_counter = 0  # Track sequence numbers within this session
 
     def on_message(self, bus, message):
         """Callback to handle messages from the GStreamer bus."""
@@ -101,6 +157,25 @@ class GStreamerRtspExtractor:
                         frame_name = f"frame_{int(time.time() * 1000)}.jpg"
                         self.minio_client.fput_object(self.bucket_name, frame_name, tmpfile.name)
                         print(f"[{EXTRACTOR_ID}] Uploaded {frame_name} to bucket {self.bucket_name}")
+
+                        # Publish FrameReadyEvent
+                        try:
+                            # For RTSP, segment_id is always 0
+                            seq_num = self.sequence_counter
+                            self.sequence_counter += 1
+                            # Estimate timestamp: use time.time() or buffer PTS? Use current time as approximation
+                            timestamp = time.time()  # could also derive from buffer timestamp if available
+                            publish_frame_ready_event(
+                                video_id=self.video_id,
+                                segment_id=0,
+                                frame_paths=[frame_name],
+                                timestamps=[timestamp],
+                                sequence_numbers=[seq_num],
+                                bucket_name=self.bucket_name
+                            )
+                        except Exception as e:
+                            print(f"[{EXTRACTOR_ID}] Failed to publish frame event: {e}")
+
             except Exception as e:
                 print(f"[{EXTRACTOR_ID}] Failed to upload frame: {e}")
             finally:
@@ -156,13 +231,15 @@ class RtspJobRequest(BaseModel):
 # --- BACKGROUND JOB FUNCTIONS ---
 def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, duration: float):
     """Background task to process a segment of a video file from Minio."""
-    # This function remains unchanged.
     with httpx.Client() as client:
         client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=busy")
-    
+
     clean_minio_url = MINIO_URL.replace("http://", "").replace("https://", "")
     minio_client = Minio(clean_minio_url, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=False)
-    
+
+    # Collect frame metadata for event publishing
+    uploaded_frames = []  # list of (object_name, timestamp, sequence_number)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             ensure_bucket(minio_client, VIDEO_BUCKET)
@@ -177,14 +254,40 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
             os.makedirs(frames_output_dir, exist_ok=True)
             extractor = GStreamerFileExtractor()
             extractor.extract_frames(temp_segment_path, frames_output_dir)
-            video_basename = os.path.splitext(video_uri)[0]
-            for frame_file in sorted(os.listdir(frames_output_dir)): # Sort frames before uploading
-                if frame_file.endswith(".jpg"):
-                    local_frame_path = os.path.join(frames_output_dir, frame_file)
-                    # New naming convention: video/segment_id/frame_name
-                    minio_object_name = f"{video_basename}/segment_{segment_id:04d}/{frame_file}"
-                    minio_client.fput_object(FRAME_BUCKET, minio_object_name, local_frame_path)
-            print(f"[{EXTRACTOR_ID}] Finished segment {segment_id} and uploaded frames to MinIO.")
+            # Derive video_id from the filename without extension
+            video_basename = os.path.splitext(os.path.basename(video_uri))[0]
+
+            # Sort frames to ensure correct sequence
+            frame_files = sorted([f for f in os.listdir(frames_output_dir) if f.endswith(".jpg")])
+            for seq_num, frame_file in enumerate(frame_files):
+                local_frame_path = os.path.join(frames_output_dir, frame_file)
+                minio_object_name = f"{video_basename}/segment_{segment_id:04d}/{frame_file}"
+                minio_client.fput_object(FRAME_BUCKET, minio_object_name, local_frame_path)
+                # Collect metadata
+                # Derive timestamp from filename or use start_time + seq_num (since 1 fps)
+                # frame_file format: frame_XXXXX.jpg; GStreamer outputs sequentially
+                # We can approximate timestamp as start_time + seq_num seconds (1 frame per second)
+                timestamp = start_time + seq_num  # 1 fps extraction
+                uploaded_frames.append({
+                    "object_name": minio_object_name,
+                    "timestamp": timestamp,
+                    "sequence_number": seq_num
+                })
+
+            print(f"[{EXTRACTOR_ID}] Finished segment {segment_id} and uploaded {len(uploaded_frames)} frames to MinIO.")
+
+            # Publish FrameReadyEvent
+            if uploaded_frames:
+                video_id = video_basename  # Use video basename as video_id
+                publish_frame_ready_event(
+                    video_id=video_id,
+                    segment_id=segment_id,
+                    frame_paths=[f["object_name"] for f in uploaded_frames],
+                    timestamps=[f["timestamp"] for f in uploaded_frames],
+                    sequence_numbers=[f["sequence_number"] for f in uploaded_frames],
+                    bucket_name=FRAME_BUCKET
+                )
+
         except Exception:
             traceback.print_exc()
         finally:
@@ -196,12 +299,15 @@ def run_rtsp_extraction_job(rtsp_url: str):
     shutdown_event.clear() # Ensure the event is not set from a previous run
     with httpx.Client() as client:
         client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=busy")
-    
+
     clean_minio_url = MINIO_URL.replace("http://", "").replace("https://", "")
     minio_client = Minio(clean_minio_url, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=False)
     rtsp_bucket = f"frames-rtsp-{EXTRACTOR_ID}-{int(time.time())}"
-    
-    extractor = GStreamerRtspExtractor(rtsp_url, minio_client, rtsp_bucket)
+
+    # Generate a video_id for this RTSP stream session (use bucket name or a UUID)
+    video_id = rtsp_bucket  # Use bucket as video_id
+
+    extractor = GStreamerRtspExtractor(rtsp_url, video_id, minio_client, rtsp_bucket)
     try:
         extractor.start()
     except Exception as e:
