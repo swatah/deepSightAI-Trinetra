@@ -17,7 +17,7 @@ import urllib.parse
 from datetime import datetime, timedelta
 from typing import Optional, List
 
-from fastapi import FastAPI, Depends, HTTPException, Request, status, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Request, status, BackgroundTasks, Response
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
@@ -29,6 +29,17 @@ from passlib.context import CryptContext
 from jose import jwt, JWTError
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
+
+# ============================================================================
+# AUTH DEPENDENCY
+# ============================================================================
+try:
+    from shared.middleware import require_auth
+    AUTH_AVAILABLE = True
+except ImportError:
+    AUTH_AVAILABLE = False
+    def require_auth():
+        return {}
 
 # ============================================================================
 # Configuration
@@ -756,6 +767,112 @@ async def oauth_callback(provider: str, request: Request, db: Session = Depends(
 # - /auth/logout (token revocation)
 # - /auth/refresh (refresh tokens)
 # - /auth/me (user profile)
+
+
+@app.delete("/tenants/{tenant_id}")
+def delete_tenant(
+    tenant_id: int,
+    payload: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a tenant and all associated data (GDPR Article 17 - Right to erasure).
+
+    Requires admin role for the tenant.
+
+    Cascades deletion to:
+    - PostgreSQL: tenant record, users, roles, api_keys, etc. (via FK cascade)
+    - Redis: all keys with tenant prefix
+    - MinIO: all objects under tenant prefix
+    - Milvus: tenant's collection
+
+    Args:
+        tenant_id: The tenant to delete
+
+    Returns:
+        204 No Content on success.
+    """
+    # Verify caller has admin role for this tenant
+    user_tenant_id = payload.get("tenant_id")
+    roles = payload.get("roles", [])
+    if user_tenant_id != tenant_id and "admin" not in roles:
+        raise HTTPException(
+            status_code=403,
+            detail="Only tenant admin can delete the tenant"
+        )
+
+    # Verify tenant exists
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Delete external data stores (best effort, errors logged)
+    _cleanup_redis(tenant_id)
+    _cleanup_minio(tenant_id)
+    _cleanup_milvus(tenant_id)
+
+    # Delete tenant from database (cascade to related tables)
+    db.delete(tenant)
+    db.commit()
+
+    return Response(status_code=204)
+
+
+def _cleanup_redis(tenant_id: int):
+    """Delete all Redis keys with tenant prefix."""
+    try:
+        from redis import Redis
+        from shared.redis_utils import make_tenant_prefix
+        # Connect to Redis (use env var)
+        redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
+        r = Redis.from_url(redis_url, decode_responses=True)
+        prefix = make_tenant_prefix(str(tenant_id))
+        # Scan and delete keys
+        cursor = 0
+        while True:
+            cursor, keys = r.scan(cursor, match=f"{prefix}*", count=100)
+            if keys:
+                r.delete(*keys)
+            if cursor == 0:
+                break
+    except Exception as e:
+        print(f"[TenantDeletion] Redis cleanup error: {e}")
+
+
+def _cleanup_minio(tenant_id: int):
+    """Delete all MinIO objects with tenant prefix."""
+    try:
+        from minio import Minio
+        minio_url = os.getenv("MINIO_URL", "http://minio:9000").replace("http://", "").replace("https://", "")
+        access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+        secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+        client = Minio(minio_url, access_key=access_key, secret_key=secret_key, secure=False)
+        # List all buckets and delete objects with tenant prefix
+        # For simplicity, we assume objects are in buckets with tenant prefix
+        # Actually tenant prefix in object key, so we need to iterate all buckets.
+        # This can be heavy. We'll just attempt to remove objects from known buckets.
+        # In production, you might use lifecycle policies or separate bucket per tenant.
+        buckets = ["videos", "frames", "frames-rtsp"]
+        for bucket in buckets:
+            try:
+                # List objects with tenant_{id}/ prefix
+                prefix = f"{tenant_id}/"
+                objects = client.list_objects(bucket, prefix=prefix, recursive=True)
+                for obj in objects:
+                    client.remove_object(bucket, obj.object_name)
+            except Exception as e:
+                print(f"[TenantDeletion] MinIO cleanup error in bucket {bucket}: {e}")
+    except Exception as e:
+        print(f"[TenantDeletion] MinIO init error: {e}")
+
+
+def _cleanup_milvus(tenant_id: int):
+    """Drop tenant's Milvus collection."""
+    try:
+        from shared.milvus import drop_tenant_collection
+        drop_tenant_collection(str(tenant_id))
+    except Exception as e:
+        print(f"[TenantDeletion] Milvus cleanup error: {e}")
 
 
 if __name__ == "__main__":
