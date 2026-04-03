@@ -17,11 +17,11 @@ import urllib.parse
 from datetime import datetime, timedelta
 from typing import Optional, List
 
-from fastapi import FastAPI, Depends, HTTPException, Request, status, BackgroundTasks, Response
+from fastapi import FastAPI, Depends, HTTPException, Request, status, BackgroundTasks, Response, Body
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, create_engine
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, create_engine, JSON
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 
@@ -164,6 +164,7 @@ class Tenant(Base):
     description = Column(String, nullable=True)
     active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    plugin_config = Column(JSON, nullable=False, default=dict)  # T2.1.9
 
 
 class UserTenant(Base):
@@ -816,6 +817,43 @@ def delete_tenant(
     db.commit()
 
     return Response(status_code=204)
+
+
+@app.put("/tenants/{tenant_id}/plugins")
+def update_tenant_plugins(
+    tenant_id: int,
+    plugin_config: dict = Body(...),
+    payload: dict = Depends(require_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Update plugin configuration for a tenant.
+
+    Requires admin role for the tenant.
+
+    Body must contain a "plugins" key with a dict of plugin settings.
+    """
+    # Auth: must be admin of this tenant
+    user_tenant_id = payload.get("tenant_id")
+    roles = payload.get("roles", [])
+    if user_tenant_id != tenant_id or "admin" not in roles:
+        raise HTTPException(
+            status_code=403,
+            detail="Only tenant admin can update plugin configuration"
+        )
+
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # Validate schema
+    if "plugins" not in plugin_config or not isinstance(plugin_config["plugins"], dict):
+        raise HTTPException(status_code=400, detail="Invalid plugin configuration: missing 'plugins' dict")
+
+    tenant.plugin_config = plugin_config
+    db.commit()
+
+    return {"message": "Plugin configuration updated", "tenant_id": tenant_id}
 
 
 def _cleanup_redis(tenant_id: int):

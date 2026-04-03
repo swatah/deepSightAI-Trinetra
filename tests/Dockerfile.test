@@ -37,7 +37,8 @@ WORKDIR /workspace
 COPY Embedder/requirements_embedder.txt /workspace/requirements_embedder.txt
 COPY ["Server and Extractor/requirements.txt", "/workspace/requirements.txt"]
 COPY UI/requirements_ui.txt /workspace/requirements_ui.txt
-RUN pip install --no-cache-dir -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt \
+COPY AuthService/requirements.txt /workspace/requirements_auth.txt
+RUN pip install --no-cache-dir -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt -r requirements_auth.txt \
     && pip install --no-cache-dir pytest pytest-cov pytest-xdist pyyaml
 
 # Copy source code
