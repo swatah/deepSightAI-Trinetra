@@ -1,0 +1,87 @@
+# Vault Helm values for HashiCorp Vault deployment
+# T1.4.1: Secrets Management with Vault
+
+server:
+  image:
+    repository: hashicorp/vault
+    tag: 1.15.6
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: true
+  service:
+    type: ClusterIP
+    port: 8200
+    targetPort: 8200
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: standard
+  auditStorage:
+    enabled: true
+    size: 1Gi
+    storageClass: standard
+  config:
+    ui: true
+    # Vault HCL configuration as a string
+    rawConfig: |
+      listener "tcp" {
+        address = "0.0.0.0:8200"
+        cluster_address = "0.0.0.0:8201"
+        tls_disable = false
+        tls_cert_file = "/vault/tls/tls.crt"
+        tls_key_file = "/vault/tls/tls.key"
+      }
+      storage "raft" {
+        path = "/vault/data"
+      }
+  # TLS secret name
+  tls:
+    enabled: true
+    secretName: vault-tls
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    fsGroup: 1000
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: false
+
+injector:
+  enabled: false
+
+ui:
+  enabled: true
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# High Availability - Raft storage enabled
+ha:
+  enabled: true
+  replicas: 3
+  disruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+raft:
+  enabled: true
+  config: |
+    storage "raft" {
+      path    = "/vault/data"
+      node_id = "vault-{{ .Values.server.name }}"
+    }
+    cluster_name = "vault-cluster"
+    cluster_tls_wan = true
