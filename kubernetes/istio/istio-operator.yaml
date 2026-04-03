@@ -1,0 +1,68 @@
+---
+# IstioOperator installation with mTLS enabled by default
+# T1.4.8: Service Mesh (Istio) mTLS installation
+
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: istio-control-plane
+  namespace: istio-system
+spec:
+  profile: default
+  components:
+    pilot:
+      enabled: true
+      k8s:
+        replicaCount: 2
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: true
+        k8s:
+          service:
+            type: LoadBalancer
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+    egressGateways:
+      - name: istio-egressgateway
+        enabled: false
+    policy:
+      enabled: true
+    telemetry:
+      enabled: true
+  values:
+    global:
+      mtls:
+        enabled: true
+      autoMTLS:
+        enabled: true
+      # Default PeerAuthentication mode for the mesh
+      defaultNodeSelector: {}
+    pilot:
+      env:
+        PILOT_ENABLE_AMBIENT_MODE: "false"
+    # Enable MeshPolicy (legacy) if needed, but PeerAuthentication is preferred
+  addonComponents:
+    kiali:
+      enabled: false
+    grafana:
+      enabled: false
+    prometheus:
+      enabled: false
+    jaeger:
+      enabled: false
+    zipkin:
+      enabled: false
+    envoyPrometheus:
+      enabled: false

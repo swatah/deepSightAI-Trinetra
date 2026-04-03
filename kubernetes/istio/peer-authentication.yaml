@@ -1,0 +1,27 @@
+---
+# Mesh-wide PeerAuthentication to enforce STRICT mTLS
+# T1.4.8: All service-to-service communication must be encrypted with mTLS
+
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+  # Apply to all workloads in the mesh (via selector empty)
+  selector: {}
+  # Or could set at namespace level without selector
+  # This applies to all workloads in istio-system namespace and can be mirrored in other namespaces
+
+---
+# Namespace-level PeerAuthentication for other namespaces (e.g., default)
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: default
+spec:
+  mtls:
+    mode: STRICT
