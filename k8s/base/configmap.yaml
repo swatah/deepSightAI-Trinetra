@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: clipsight-common-config
+  name: deepSightAI-Trinetra-common-config
   labels:
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
 data:
   # Common environment variables for all services
   MINIO_URL: "http://minio:9000"
@@ -13,7 +13,7 @@ data:
   REGISTRY_URL: "http://registry:8000"
   LOG_LEVEL: "INFO"
   # Database
-  POSTGRES_URL: "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/clipsight"
+  POSTGRES_URL: "postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/deepSightAI-Trinetra"
   # Milvus
   MILVUS_HOST: "milvus"
   MILVUS_PORT: "19530"

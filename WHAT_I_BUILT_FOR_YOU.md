@@ -1,14 +1,14 @@
 # What I Created For You: Complete Enterprise Development System
 
 **Date**: 2025-04-01
-**Repository**: `/home/abhinav/ml/ClipSight`
+**Repository**: `/home/abhinav/ml/deepSightAI Trinetra`
 **Status**: ✅ Production-ready development framework
 
 ---
 
 ## Executive Summary
 
-You now have a **complete, vendor-neutral, test-driven enterprise development system** for ClipSight. Everything is in place to start coding today with zero rework risk.
+You now have a **complete, vendor-neutral, test-driven enterprise development system** for deepSightAI Trinetra. Everything is in place to start coding today with zero rework risk.
 
 **What you can do right now**:
 ```bash
@@ -132,7 +132,7 @@ spec:
     spec:
       containers:
       - name: main-api
-        image: clipsight/main-api:latest
+        image: deepSightAI-Trinetra/main-api:latest
         ports:
         - containerPort: 8080
 EOF
@@ -152,7 +152,7 @@ $ cat > k8s/base/configmap.yaml <<'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: clipsight-common-config
+  name: deepSightAI-Trinetra-common-config
 data:
   MINIO_URL: http://minio:9000
   REDIS_URL: redis://redis:6379

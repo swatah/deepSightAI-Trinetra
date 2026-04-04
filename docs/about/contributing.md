@@ -1,6 +1,6 @@
-# Contributing to ClipSight
+# Contributing to deepSightAI Trinetra
 
-Thank you for your interest in contributing! ClipSight is an open-source project (AGPL v3) and we welcome contributions from the community.
+Thank you for your interest in contributing! deepSightAI Trinetra is an open-source project (AGPL v3) and we welcome contributions from the community.
 
 ---
 
@@ -12,7 +12,7 @@ If you find a bug, please create an issue on GitHub with:
 
 - Clear description of the bug and steps to reproduce
 - Expected vs actual behavior
-- Environment details (OS, Docker/K8s version, ClipSight version)
+- Environment details (OS, Docker/K8s version, deepSightAI Trinetra version)
 - Logs/screenshots if applicable
 
 ### 💡 Suggest Features
@@ -33,8 +33,8 @@ Contributions via pull requests are greatly appreciated.
 1. **Fork the repository** on GitHub
 2. **Clone your fork** locally:
    ```bash
-   git clone https://github.com/YOUR-USERNAME/clipsight.git
-   cd clipsight
+   git clone https://github.com/YOUR-USERNAME/deepSightAI-Trinetra.git
+   cd deepSightAI-Trinetra
    ```
 3. **Create a branch** for your work:
    ```bash
@@ -114,7 +114,7 @@ Contributions via pull requests are greatly appreciated.
 
 - Use official base images (python:3.11-slim, etc.)
 - Multi-stage builds to minimize image size
-- Non-root user (`clipsight`) for security
+- Non-root user (`deepSightAI-Trinetra`) for security
 - Explicit `USER` directive before running app
 - Health checks for all containers
 
@@ -131,7 +131,7 @@ Contributions via pull requests are greatly appreciated.
 ## Project Structure
 
 ```
-clipsight/
+deepSightAI-Trinetra/
 ├── AuthService/          # Authentication microservice
 ├── AuditService/         # Audit log service
 ├── Embedder/             # Vector embedding service
@@ -175,9 +175,9 @@ mkdocs build  # Generate static site in site/
 ## Getting Help
 
 - **Documentation**: Read the [docs](../../) first!
-- **Discussions**: [GitHub Discussions](https://github.com/yourorg/clipsight/discussions) for questions
-- **Chat**: [Community Slack](https://clipsight-community.slack.com)
-- **Issues**: [GitHub Issues](https://github.com/yourorg/clipsight/issues) for bugs
+- **Discussions**: [GitHub Discussions](https://github.com/yourorg/deepSightAI-Trinetra/discussions) for questions
+- **Chat**: [Community Slack](https://deepSightAI-Trinetra-community.slack.com)
+- **Issues**: [GitHub Issues](https://github.com/yourorg/deepSightAI-Trinetra/issues) for bugs
 - **Real-time**: `#development` channel on Slack
 
 ---

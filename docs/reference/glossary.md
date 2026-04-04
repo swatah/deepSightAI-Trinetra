@@ -1,14 +1,14 @@
 # Glossary
 
-Key terms and concepts used throughout the ClipSight documentation.
+Key terms and concepts used throughout the deepSightAI Trinetra documentation.
 
 ---
 
 ## A
 
 **API (Application Programming Interface)**
-- The RESTful HTTP interface that clients use to interact with ClipSight services.
-- Base URL: `https://api.clipsight.com/v1`
+- The RESTful HTTP interface that clients use to interact with deepSightAI Trinetra services.
+- Base URL: `https://api.trinetra.com/v1`
 
 **Audit Logging**
 - Immutable recording of all user actions and system events for compliance and security monitoring.
@@ -81,7 +81,7 @@ Key terms and concepts used throughout the ClipSight documentation.
 
 **Kubernetes (K8s)**
 - Container orchestration platform used for production deployments.
-- ClipSight packages services as Helm charts for K8s.
+- deepSightAI Trinetra packages services as Helm charts for K8s.
 
 **Kustomize**
 - Kubernetes native configuration management tool used for environment overlays.
@@ -109,7 +109,7 @@ Key terms and concepts used throughout the ClipSight documentation.
 
 **OpenAPI Specification**
 - Standard for describing REST APIs (formerly Swagger).
-- ClipSight provides OpenAPI specs for all services for client generation and documentation.
+- deepSightAI Trinetra provides OpenAPI specs for all services for client generation and documentation.
 
 ---
 
@@ -137,7 +137,7 @@ Key terms and concepts used throughout the ClipSight documentation.
 
 **RBAC (Role-Based Access Control)**
 - Authorization model where permissions are assigned to roles, and users assigned to roles.
-- ClipSight supports roles: `admin`, `operator`, `viewer`.
+- deepSightAI Trinetra supports roles: `admin`, `operator`, `viewer`.
 
 ---
 
@@ -149,7 +149,7 @@ Key terms and concepts used throughout the ClipSight documentation.
 
 **SIEM (Security Information and Event Management)**
 - System that aggregates and analyzes security events.
-- ClipSight audit logs forwarded to SIEM (Splunk, Elastic) via Kafka.
+- deepSightAI Trinetra audit logs forwarded to SIEM (Splunk, Elastic) via Kafka.
 
 **Streamlit**
 - Python-based web framework used for the user interface.

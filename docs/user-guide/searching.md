@@ -12,7 +12,7 @@ Example:
 - ✅ Query: `"red truck"` → finds frames with red trucks (even if "red" or "truck" never appears in metadata)
 - ❌ Traditional metadata search: would only match if someone manually tagged "red truck"
 
-ClipSight uses **OpenCLIP**, a vision-language model trained on 400M image-text pairs. It converts both images and text into 512-dimensional vectors; similar concepts cluster together in vector space.
+deepSightAI Trinetra uses **OpenCLIP**, a vision-language model trained on 400M image-text pairs. It converts both images and text into 512-dimensional vectors; similar concepts cluster together in vector space.
 
 ---
 
@@ -38,7 +38,7 @@ Results appear as image thumbnails with:
 ### Via API
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/search \
+curl -X POST https://api.trinetra.com/v1/search \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -78,8 +78,8 @@ curl -X POST https://api.clipsight.com/v1/search \
       "timestamp_seconds": 45.2,
       "timestamp_formatted": "00:00:45",
       "similarity": 0.94,
-      "thumbnail_url": "https://minio.clipsight.com/frames/vid_abc/frame_00423.jpg",
-      "video_url": "https://minio.clipsight.com/videos/vid_abc.mp4",
+      "thumbnail_url": "https://minio.deepSightAI-Trinetra.com/frames/vid_abc/frame_00423.jpg",
+      "video_url": "https://minio.deepSightAI-Trinetra.com/videos/vid_abc.mp4",
       "segment_id": "seg_0002"
     },
     ...
@@ -245,7 +245,7 @@ If poor quality:
 Instead of text, provide an image to find visually similar frames:
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/search/image \
+curl -X POST https://api.trinetra.com/v1/search/image \
   -H "Authorization: Bearer TOKEN" \
   -F "image=@query_image.jpg" \
   -F "top_k=20"
@@ -264,7 +264,7 @@ Combine text query with image reference:
 ```bash
 curl -d '{
   "query": "similar vehicle but blue",
-  "reference_image_url": "https://minio.clipsight.com/frames/frame_123.jpg",
+  "reference_image_url": "https://minio.deepSightAI-Trinetra.com/frames/frame_123.jpg",
   "lambda": 0.7  # weight: 0.7 text, 0.3 image
 }'
 ```
@@ -276,7 +276,7 @@ curl -d '{
 Search multiple queries at once:
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/search/batch \
+curl -X POST https://api.trinetra.com/v1/search/batch \
   -H "Authorization: Bearer TOKEN" \
   -d '{
     "queries": [
@@ -305,7 +305,7 @@ On each result, click 👍 or 👎. This data is used (future) to:
 ### API Feedback Endpoint
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/feedback \
+curl -X POST https://api.trinetra.com/v1/feedback \
   -H "Authorization: Bearer TOKEN" \
   -d '{
     "query": "person wearing helmet",

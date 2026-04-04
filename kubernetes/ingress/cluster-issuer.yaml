@@ -8,7 +8,7 @@ metadata:
   name: letsencrypt-prod
 spec:
   acme:
-    email: admin@clipsight.local
+    email: admin@deepSightAI-Trinetra.local
     server: https://acme-v2.api.letsencrypt.org/directory
     privateKeySecretRef:
       name: letsencrypt-prod-key

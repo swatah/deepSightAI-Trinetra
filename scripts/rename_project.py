@@ -16,8 +16,14 @@ from pathlib import Path
 
 OLD_NAME = "ClipSight"
 OLD_NAME_LOWER = "clipsight"
-NEW_NAME = "deepSightAI Trinetra"
-NEW_NAME_LOWER = "trinetra"  # Use short form for technical IDs
+
+# Naming scheme:
+# - DISPLAY_NAME: product name for docs/UI (with space): "deepSightAI Trinetra"
+# - TECHNICAL_NAME: code identifiers (Docker, DB, constants) with hyphen: "deepSightAI-Trinetra"
+# - URL_SUBDOMAIN: URL subdomain short form: "trinetra"
+DISPLAY_NAME = "deepSightAI Trinetra"
+TECHNICAL_NAME = "deepSightAI-Trinetra"
+URL_SUBDOMAIN = "trinetra"
 
 # ============================================================================
 # REPLACEMENT RULES
@@ -27,10 +33,9 @@ NEW_NAME_LOWER = "trinetra"  # Use short form for technical IDs
 # Patterns are regex, use raw strings
 REPLACEMENTS = [
     # === Display/Brand Names ===
-    # Case-sensitive exact: "ClipSight" → "deepSightAI Trinetra"
-    (r'\bClipSight\b', NEW_NAME),
-    # Case-insensitive whole word: "clipsight" → "trinetra"
-    # Note: using (?i) flag globally in processing
+    # Case-sensitive exact: "ClipSight" → "deepSightAI-Trinetra"
+    (r'\bClipSight\b', DISPLAY_NAME, re.MULTILINE),
+    # The rest of the patterns match "clipsight" case-insensitively
 
     # === URLs (must be first before generic clipsight→trinetra) ===
     (r'https?://api\.clipsight\.com', 'https://api.trinetra.com'),
@@ -41,51 +46,51 @@ REPLACEMENTS = [
     (r'https?://hub\.docker\.com/u/clipsight', 'https://hub.docker.com/u/trinetra'),
 
     # === Docker Images ===
-    (r'image:\s*clipsight/', 'image: trinetra/'),
-    (r'clipsight/registry', 'trinetra/registry'),
-    (r'clipsight/main-api', 'trinetra/main-api'),
-    (r'clipsight/extractor', 'trinetra/extractor'),
-    (r'clipsight/embedder', 'trinetra/embedder'),
-    (r'clipsight/search-api', 'trinetra/search-api'),
+    (r'image:\s*clipsight/', f'image: {TECHNICAL_NAME}/'),
+    (r'clipsight/registry', f'{TECHNICAL_NAME}/registry'),
+    (r'clipsight/main-api', f'{TECHNICAL_NAME}/main-api'),
+    (r'clipsight/extractor', f'{TECHNICAL_NAME}/extractor'),
+    (r'clipsight/embedder', f'{TECHNICAL_NAME}/embedder'),
+    (r'clipsight/search-api', f'{TECHNICAL_NAME}/search-api'),
     # Docker build -t tags
-    (r'-t\s+clipsight/','-t trinetra/'),
-    (r'docker build -t clipsight/', 'docker build -t trinetra/'),
+    (r'-t\s+clipsight/', f'-t {TECHNICAL_NAME}/'),
+    (r'docker build -t clipsight/', f'docker build -t {TECHNICAL_NAME}/'),
 
     # === Database Names ===
-    (r'\bclipsight_test\b', f'{NEW_NAME_LOWER}_test'),
-    (r'\bclipsight\b(?!\w)', NEW_NAME_LOWER),  # clipsight as standalone word
+    (r'\bclipsight_test\b', f'{TECHNICAL_NAME}_test'),
+    (r'\bclipsight\b(?!\w)', TECHNICAL_NAME),  # clipsight as standalone word
 
     # === Redis / Kafka / MinIO prefixes ===
-    (r'clipsight:', f'{NEW_NAME_LOWER}:'),
-    (r'clipsight_', f'{NEW_NAME_LOWER}_'),
-    (r'clipsight-', f'{NEW_NAME_LOWER}-'),
+    (r'clipsight:', f'{TECHNICAL_NAME}:'),
+    (r'clipsight_', f'{TECHNICAL_NAME}_'),
+    (r'clipsight-', f'{TECHNICAL_NAME}-'),
 
     # === Kubernetes / ArgoCD ===
-    (r'clipsight-staging', f'{NEW_NAME_LOWER}-staging'),
-    (r'clipsight-production', f'{NEW_NAME_LOWER}-production'),
+    (r'clipsight-staging', f'{TECHNICAL_NAME}-staging'),
+    (r'clipsight-production', f'{TECHNICAL_NAME}-production'),
     # Labels
-    (r'(app\.kubernetes\.io/part-of:\s*)clipsight', rf'\1{NEW_NAME_LOWER}'),
-    (r'(app\.kubernetes\.io/name:\s*)clipsight', rf'\1{NEW_NAME_LOWER}'),
-    (r'(app\.kubernetes\.io/instance:\s*)clipsight', rf'\1{NEW_NAME_LOWER}'),
+    (r'(app\.kubernetes\.io/part-of:\s*)clipsight', rf'\1{TECHNICAL_NAME}'),
+    (r'(app\.kubernetes\.io/name:\s*)clipsight', rf'\1{TECHNICAL_NAME}'),
+    (r'(app\.kubernetes\.io/instance:\s*)clipsight', rf'\1{TECHNICAL_NAME}'),
     # Namespace references
-    (r'namespace:\s*clipsight-staging', f'namespace: {NEW_NAME_LOWER}-staging'),
-    (r'namespace:\s*clipsight-production', f'namespace: {NEW_NAME_LOWER}-production'),
-    (r'namespace:\s*clipsight(\b|-)', f'namespace: {NEW_NAME_LOWER}\\1'),
+    (r'namespace:\s*clipsight-staging', f'namespace: {TECHNICAL_NAME}-staging'),
+    (r'namespace:\s*clipsight-production', f'namespace: {TECHNICAL_NAME}-production'),
+    (r'namespace:\s*clipsight(\b|-)', f'namespace: {TECHNICAL_NAME}\\1'),
 
     # === Helm Charts ===
-    (r'name:\s*clipsight', f'name: {NEW_NAME_LOWER}'),
-    (r'app\.kubernetes\.io/part-of: clipsight', f'app.kubernetes.io/part-of: {NEW_NAME_LOWER}'),
+    (r'name:\s*clipsight', f'name: {TECHNICAL_NAME}'),
+    (r'app\.kubernetes\.io/part-of: clipsight', f'app.kubernetes.io/part-of: {TECHNICAL_NAME}'),
 
     # === mkdocs.yml ===
-    (r'site_name:\s*ClipSight Enterprise', f'site_name: {NEW_NAME} Enterprise'),
-    (r'site_author:\s*ClipSight Team', f'site_author: {NEW_NAME} Team'),
-    (r'repo_url:\s*https://github\.com/yourorg/clipsight', f'repo_url: https://github.com/yourorg/deepSightAI-Trinetra'),
-    (r'repo_name:\s*yourorg/clipsight', 'repo_name: yourorg/deepSightAI-Trinetra'),
-    (r'link:\s*https://github\.com/yourorg/clipsight', 'link: https://github.com/yourorg/deepSightAI-Trinetra'),
-    (r'link:\s*https://hub\.docker\.com/u/clipsight', 'link: https://hub.docker.com/u/trinetra'),
+    (r'site_name:\s*ClipSight Enterprise', f'site_name: {DISPLAY_NAME} Enterprise', re.MULTILINE),
+    (r'site_author:\s*ClipSight Team', f'site_author: {DISPLAY_NAME} Team', re.MULTILINE),
+    (r'repo_url:\s*https://github\.com/yourorg/clipsight', f'repo_url: https://github.com/yourorg/{TECHNICAL_NAME}'),
+    (r'repo_name:\s*yourorg/clipsight', f'repo_name: yourorg/{TECHNICAL_NAME}'),
+    (r'link:\s*https://github\.com/yourorg/clipsight', f'link: https://github.com/yourorg/{TECHNICAL_NAME}'),
+    (r'link:\s*https://hub\.docker\.com/u/clipsight', f'link: https://hub.docker.com/u/{URL_SUBDOMAIN}'),
 
-    # === Documentation generic (fallback) ===
-    (r'\bclipsight\b', NEW_NAME_LOWER),
+    # === Documentation generic (fallback) - catch any remaining clipsight ===
+    (r'clipsight', TECHNICAL_NAME),
 ]
 
 # ============================================================================
@@ -122,6 +127,10 @@ def should_process_file(path: Path) -> bool:
     if '.git' in path.parts:
         return False
 
+    # Skip the rename script itself to prevent self-modification
+    if path.name == 'rename_project.py' and path.parent.name == 'scripts':
+        return False
+
     # Skip common non-text directories
     skip_dirs = {
         'node_modules', 'venv', '__pycache__', '.pytest_cache',
@@ -129,7 +138,7 @@ def should_process_file(path: Path) -> bool:
         '.idea', '.vscode', '.eggs', '*.egg-info',
     }
     for part in path.parts:
-        if part.startswith('.') and part != '.':
+        if part.startswith('.') and part != '.' and part != '.github':
             return False
         if part in skip_dirs:
             return False
@@ -158,8 +167,12 @@ def should_process_file(path: Path) -> bool:
 
 def apply_replacements(content: str) -> str:
     """Apply all replacement rules to content."""
-    for pattern, replacement in REPLACEMENTS:
-        flags = re.MULTILINE | re.IGNORECASE
+    for item in REPLACEMENTS:
+        if len(item) == 3:
+            pattern, replacement, flags = item
+        else:
+            pattern, replacement = item
+            flags = re.MULTILINE | re.IGNORECASE  # Default: case-insensitive
         content = re.sub(pattern, replacement, content, flags=flags)
     return content
 
@@ -199,12 +212,13 @@ def process_file(path: Path, dry_run: bool = False) -> bool:
 def rename_path_component(name: str) -> str:
     """Rename a directory or filename if it contains old names."""
     new_name = name
-    # Apply specific renames to the name only
-    new_name = re.sub(r'clipsight', NEW_NAME_LOWER, new_name, flags=re.IGNORECASE)
-    new_name = re.sub(r'ClipSight', NEW_NAME, new_name)
+    # First, handle exact capitalized brand (case-sensitive)
+    new_name = re.sub(r'ClipSight', DISPLAY_NAME, new_name)
+    # Then handle any case variation of clipsight (technical identifiers)
+    new_name = re.sub(r'clipsight', TECHNICAL_NAME, new_name, flags=re.IGNORECASE)
     # Additional patterns for filenames
-    new_name = re.sub(r'clipsight-staging', f'{NEW_NAME_LOWER}-staging', new_name, flags=re.IGNORECASE)
-    new_name = re.sub(r'clipsight-production', f'{NEW_NAME_LOWER}-production', new_name, flags=re.IGNORECASE)
+    new_name = re.sub(r'clipsight-staging', f'{TECHNICAL_NAME}-staging', new_name, flags=re.IGNORECASE)
+    new_name = re.sub(r'clipsight-production', f'{TECHNICAL_NAME}-production', new_name, flags=re.IGNORECASE)
     return new_name
 
 def rename_files_and_dirs(root: Path, dry_run: bool = False) -> int:

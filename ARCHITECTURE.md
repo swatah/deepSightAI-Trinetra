@@ -1,8 +1,8 @@
-# ClipSight Architecture Guide
+# deepSightAI Trinetra Architecture Guide
 
 ## Overview
 
-ClipSight is a distributed video content search system that enables semantic search through video frames using natural language queries. The system processes uploaded videos, extracts frames, generates vector embeddings using CLIP, and provides similarity-based search capabilities.
+deepSightAI Trinetra is a distributed video content search system that enables semantic search through video frames using natural language queries. The system processes uploaded videos, extracts frames, generates vector embeddings using CLIP, and provides similarity-based search capabilities.
 
 ## System Architecture
 
@@ -307,7 +307,7 @@ Networks:
 
 ```bash
 git clone <repository>
-cd ClipSight
+cd deepSightAI Trinetra
 ```
 
 ### 2. Download Model (for Embedder)

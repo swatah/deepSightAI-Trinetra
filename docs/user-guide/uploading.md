@@ -1,6 +1,6 @@
 # Uploading Videos
 
-This page covers everything about getting video content into ClipSight: supported formats, upload methods, processing workflow, and troubleshooting.
+This page covers everything about getting video content into deepSightAI Trinetra: supported formats, upload methods, processing workflow, and troubleshooting.
 
 ---
 
@@ -31,7 +31,7 @@ Common RTSP paths:
 - `/cam/realmonitor?channel=1&subtype=0` (Dahua)
 - `/h264/ch1/main/av_stream` (ONVIF)
 
-ClipSight will continuously pull frames (1 frame per 5 seconds) and process as new videos.
+deepSightAI Trinetra will continuously pull frames (1 frame per 5 seconds) and process as new videos.
 
 ---
 
@@ -48,7 +48,7 @@ Drag & drop or click to select. Max 2GB per file.
 #### Single File Upload
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/process_video \
+curl -X POST https://api.trinetra.com/v1/process_video \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -F "file=@/path/to/video.mp4" \
   -F "tags=traffic,highway" \
@@ -78,7 +78,7 @@ curl -X POST https://api.clipsight.com/v1/process_video \
 #### Multiple Files (Batch)
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/batch_upload \
+curl -X POST https://api.trinetra.com/v1/batch_upload \
   -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -F "files=@video1.mp4" \
   -F "files=@video2.mp4" \
@@ -95,16 +95,16 @@ Returns array of video IDs. Max 10 concurrent uploads per tenant.
 Install:
 
 ```bash
-pip install clipsight
+pip install deepSightAI-Trinetra
 ```
 
 Usage:
 
 ```python
-from clipsight import Client
+from deepSightAI-Trinetra import Client
 
 client = Client(
-    api_url="https://api.clipsight.com",
+    api_url="https://api.trinetra.com",
     api_key="YOUR_API_KEY"  # or JWT
 )
 
@@ -132,14 +132,14 @@ video_ids = client.batch_upload(
 
 ### 4. S3/Swedish: Upload to MinIO, then notify
 
-For large-scale pipelines, upload directly to MinIO S3 endpoint, then tell ClipSight:
+For large-scale pipelines, upload directly to MinIO S3 endpoint, then tell deepSightAI Trinetra:
 
 ```bash
 # 1. Upload to MinIO S3 bucket "videos"
-mc cp /videos/video.mp4 clipsight/videos/
+mc cp /videos/video.mp4 deepSightAI-Trinetra/videos/
 
-# 2. Register with ClipSight
-curl -X POST https://api.clipsight.com/v1/register_s3_video \
+# 2. Register with deepSightAI Trinetra
+curl -X POST https://api.trinetra.com/v1/register_s3_video \
   -H "Authorization: Bearer TOKEN" \
   -d '{
     "s3_key": "videos/video.mp4",
@@ -207,7 +207,7 @@ Video statuses:
 Check status:
 
 ```bash
-curl https://api.clipsight.com/v1/video/{video_id}/status \
+curl https://api.trinetra.com/v1/video/{video_id}/status \
   -H "Authorization: Bearer TOKEN"
 ```
 
@@ -245,7 +245,7 @@ Auto-refresh every 10 seconds.
 
 ```bash
 # Watch status of all videos
-watch -n 5 'curl -H "Authorization: Bearer TOKEN" https://api.clipsight.com/v1/videos | jq .'
+watch -n 5 'curl -H "Authorization: Bearer TOKEN" https://api.trinetra.com/v1/videos | jq .'
 
 # Check embedder queue depth
 curl http://localhost:8002/queue/status | jq .
@@ -267,10 +267,10 @@ Search by tag:
 
 ```bash
 # Find videos with tag "traffic"
-curl https://api.clipsight.com/v1/videos?tag=traffic
+curl https://api.trinetra.com/v1/videos?tag=traffic
 
 # Multiple tags: must have all
-curl https://api.clipsight.com/v1/videos?tag=traffic&tag=highway-101
+curl https://api.trinetra.com/v1/videos?tag=traffic&tag=highway-101
 ```
 
 ### Metadata
@@ -342,7 +342,7 @@ From Web UI:
 From API:
 
 ```bash
-curl -X DELETE https://api.clipsight.com/v1/video/{video_id} \
+curl -X DELETE https://api.trinetra.com/v1/video/{video_id} \
   -H "Authorization: Bearer TOKEN"
 ```
 
@@ -368,7 +368,7 @@ Some errors are transient (e.g., embedder temporarily down). In these cases, the
 Export all video metadata and search results:
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/export \
+curl -X POST https://api.trinetra.com/v1/export \
   -H "Authorization: Bearer TOKEN" \
   -d '{"format": "csv"}' > videos_export.csv
 ```

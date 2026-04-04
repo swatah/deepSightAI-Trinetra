@@ -1,15 +1,15 @@
 # User Guide
 
-Welcome to ClipSight! This guide covers everything you need to use the platform effectively: uploading videos, searching content, understanding results, and integrating via API.
+Welcome to deepSightAI Trinetra! This guide covers everything you need to use the platform effectively: uploading videos, searching content, understanding results, and integrating via API.
 
 ---
 
 ## Overview
 
-ClipSight is a video content search platform. The workflow:
+deepSightAI Trinetra is a video content search platform. The workflow:
 
 1. **Upload** a video file (MP4, MOV, AVI) or provide RTSP stream URL
-2. **Process**: ClipSight automatically extracts frames, generates AI embeddings (OpenCLIP), and stores in vector database
+2. **Process**: deepSightAI Trinetra automatically extracts frames, generates AI embeddings (OpenCLIP), and stores in vector database
 3. **Search**: Use natural language queries like "red truck" or "person wearing helmet" to find relevant frames
 4. **Review**: See matching frames with timestamps, jump to video positions
 
@@ -22,7 +22,7 @@ All processing happens automatically in the background. You don't need to manual
 The web UI is available at your deployment URL:
 
 - **Docker Compose**: http://localhost:8501
-- **Kubernetes**: Depends on ingress configuration (e.g., `http://ui.clipsight.com`)
+- **Kubernetes**: Depends on ingress configuration (e.g., `http://ui.deepSightAI-Trinetra.com`)
 - **Cloud**: Provided by load balancer
 
 Login with your credentials (if authentication enabled). For evaluation deployments, auth may be disabled.
@@ -33,7 +33,7 @@ Login with your credentials (if authentication enabled). For evaluation deployme
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ ClipSight Enterprise                                    👤 │
+│ deepSightAI Trinetra Enterprise                                    👤 │
 ├─────────────────────────────────────────────────────────────┤
 │  [Upload] [Search] [My Videos] [Admin]                   │
 ├─────────────────────────────────────────────────────────────┤
@@ -95,13 +95,13 @@ Processing time estimate: 1-2x video duration (depends on GPU availability).
 
 ```bash
 # First, obtain JWT token from AuthService
-curl -X POST https://auth.clipsight.com/token \
+curl -X POST https://auth.trinetra.com/token \
   -d "client_id=YOUR_CLIENT_ID&client_secret=YOUR_SECRET&grant_type=client_credentials&tenant_id=your-tenant"
 
 # Response: {"access_token":"eyJ...","expires_in":3600}
 
 # Upload video
-curl -X POST https://api.clipsight.com/v1/process_video \
+curl -X POST https://api.trinetra.com/v1/process_video \
   -H "Authorization: Bearer eyJ..." \
   -F "file=@/path/to/video.mp4" \
   -F "tags=vehicle,traffic" \
@@ -120,7 +120,7 @@ Poll for completion:
 
 ```bash
 curl -H "Authorization: Bearer eyJ..." \
-  https://api.clipsight.com/v1/video/vid_abc123def456/status
+  https://api.trinetra.com/v1/video/vid_abc123def456/status
 
 # Response:
 {
@@ -128,7 +128,7 @@ curl -H "Authorization: Bearer eyJ..." \
   "status": "ready",
   "segments_processed": 12,
   "total_frames": 720,
-  "thumbnail_url": "https://minio.clipsight.com/frames/vid_abc123/thumbnail.jpg"
+  "thumbnail_url": "https://minio.deepSightAI-Trinetra.com/frames/vid_abc123/thumbnail.jpg"
 }
 ```
 
@@ -168,7 +168,7 @@ Click **Jump to timestamp** to open video player at that exact moment.
 ### Search API
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/search \
+curl -X POST https://api.trinetra.com/v1/search \
   -H "Authorization: Bearer eyJ..." \
   -H "Content-Type: application/json" \
   -d '{
@@ -192,8 +192,8 @@ Response:
       "timestamp_seconds": 45.2,
       "timestamp_formatted": "00:00:45",
       "similarity": 0.94,
-      "thumbnail_url": "https://minio.clipsight.com/frames/vid_abc123/frame_00123.jpg",
-      "video_url": "https://minio.clipsight.com/videos/vid_abc123.mp4",
+      "thumbnail_url": "https://minio.deepSightAI-Trinetra.com/frames/vid_abc123/frame_00123.jpg",
+      "video_url": "https://minio.deepSightAI-Trinetra.com/videos/vid_abc123.mp4",
       "segment_id": "seg_0004"
     },
     ...
@@ -210,7 +210,7 @@ Response:
 Combine multiple criteria:
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/search \
+curl -X POST https://api.trinetra.com/v1/search \
   -H "Authorization: Bearer eyJ..." \
   -d '{
     "query": "person",
@@ -275,7 +275,7 @@ From **My Videos**:
 API:
 
 ```bash
-curl -X DELETE https://api.clipsight.com/v1/video/vid_abc123 \
+curl -X DELETE https://api.trinetra.com/v1/video/vid_abc123 \
   -H "Authorization: Bearer eyJ..."
 ```
 
@@ -285,7 +285,7 @@ curl -X DELETE https://api.clipsight.com/v1/video/vid_abc123 \
 
 ### Similarity Scores
 
-ClipSight uses CLIP model for semantic similarity. Scores are cosine similarity (0-1, or 0-100%):
+deepSightAI Trinetra uses CLIP model for semantic similarity. Scores are cosine similarity (0-1, or 0-100%):
 
 - **90-100%**: Exact match (e.g., "red car" returns frames with red cars)
 - **70-89%**: Good match (visually similar but not exact)
@@ -317,7 +317,7 @@ CLIP understands general concepts but may misinterpret:
 For bulk uploads, use the bulk API:
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/batch_upload \
+curl -X POST https://api.trinetra.com/v1/batch_upload \
   -H "Authorization: Bearer eyJ..." \
   -F "files=@video1.mp4" \
   -F "files=@video2.mp4" \
@@ -330,9 +330,9 @@ Returns array of `video_id`s. Poll each for status.
 Or use CLI tool (comes with Python SDK):
 
 ```bash
-pip install clipsight-sdk
+pip install deepSightAI-Trinetra-sdk
 
-clipsight upload --tags "traffic,intersection" /path/to/videos/*.mp4
+deepSightAI-Trinetra upload --tags "traffic,intersection" /path/to/videos/*.mp4
 ```
 
 ---
@@ -355,7 +355,7 @@ Configure in `Admin → Notifications`.
 For automation, configure webhook URL:
 
 ```yaml
-POST https://your-server.com/clipsight-hooks
+POST https://your-server.com/deepSightAI-Trinetra-hooks
 Content-Type: application/json
 
 {
@@ -399,7 +399,7 @@ Mobile-specific gestures:
 
 ## Accessibility
 
-ClipSight UI follows WCAG 2.1 AA guidelines:
+deepSightAI Trinetra UI follows WCAG 2.1 AA guidelines:
 - Keyboard navigation support
 - Screen reader compatible (ARIA labels)
 - High contrast mode (toggle in Admin → Settings)
@@ -438,8 +438,8 @@ Exceeding returns `429 Too Many Requests`. Contact admin to increase limits for 
 - **Documentation**: This site (use search)
 - **API reference**: [Full API docs](api.md)
 - **Troubleshooting**: [Operations Guide](operations/troubleshooting.md)
-- **Community**: [GitHub Discussions](https://github.com/yourorg/clipsight/discussions)
-- **Bugs/Feature requests**: [GitHub Issues](https://github.com/yourorg/clipsight/issues)
+- **Community**: [GitHub Discussions](https://github.com/yourorg/deepSightAI-Trinetra/discussions)
+- **Bugs/Feature requests**: [GitHub Issues](https://github.com/yourorg/deepSightAI-Trinetra/issues)
 
 ---
 

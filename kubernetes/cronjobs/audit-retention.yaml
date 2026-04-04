@@ -4,7 +4,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: audit-retention
-  namespace: clipsight
+  namespace: deepSightAI-Trinetra
   labels:
     app: audit-retention
     component: retention
@@ -33,7 +33,7 @@ spec:
                   name: audit-secrets
                   key: database-url
             - name: S3_BUCKET
-              value: "clipsight-audit-archive"
+              value: "deepSightAI-Trinetra-audit-archive"
             - name: S3_PREFIX
               value: "audit-logs"
             - name: ARCHIVE_AFTER_DAYS
@@ -73,7 +73,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: audit-retention-script
-  namespace: clipsight
+  namespace: deepSightAI-Trinetra
 data:
   archive_audit_logs.py: |
     #!/usr/bin/env python3
@@ -89,7 +89,7 @@ data:
     logger = logging.getLogger(__name__)
 
     DATABASE_URL = os.getenv("DATABASE_URL")
-    S3_BUCKET = os.getenv("S3_BUCKET", "clipsight-audit-archive")
+    S3_BUCKET = os.getenv("S3_BUCKET", "deepSightAI-Trinetra-audit-archive")
     S3_PREFIX = os.getenv("S3_PREFIX", "audit-logs")
     ARCHIVE_AFTER_DAYS = int(os.getenv("ARCHIVE_AFTER_DAYS", "90"))
     CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))

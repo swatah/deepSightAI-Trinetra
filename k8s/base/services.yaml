@@ -4,7 +4,7 @@ metadata:
   name: registry
   labels:
     app.kubernetes.io/name: registry
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
 spec:
   selector:
     app: registry
@@ -20,7 +20,7 @@ metadata:
   name: main-api
   labels:
     app.kubernetes.io/name: main-api
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
 spec:
   selector:
     app: main-api
@@ -36,7 +36,7 @@ metadata:
   name: extractor
   labels:
     app.kubernetes.io/name: extractor
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
 spec:
   selector:
     app: extractor
@@ -52,7 +52,7 @@ metadata:
   name: embedder
   labels:
     app.kubernetes.io/name: embedder
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
 spec:
   selector:
     app: embedder

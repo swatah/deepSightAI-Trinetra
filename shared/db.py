@@ -15,7 +15,7 @@ from typing import Dict
 # Use DATABASE_URL from environment, fallback to development default
 BASE_DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:devpassword@localhost:5432/clipsight"
+    "postgresql://postgres:devpassword@localhost:5432/deepSightAI-Trinetra"
 )
 
 # Connection pool cache: tenant_id -> Engine

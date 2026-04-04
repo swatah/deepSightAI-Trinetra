@@ -74,10 +74,10 @@ Each task has:
 |------|-------------|-------------------|-------|-------|
 | T1.1.1 | Convert Docker Compose services to K8s manifests | All services deploy with `kubectl apply -k k8s/overlays/development` | `tests/k8s/test_manifests.py` | `k8s/base/` |
 | T1.1.2 | Create Kustomize overlays for dev/prod | `kubectl apply -k k8s/overlays/development` works on k3s | `tests/k8s/test_overlays.py` | `k8s/overlays/` |
-| T1.1.3 | Package each service as Helm chart | `helm install clipsight-main-api ./helm/main-api` succeeds | `tests/helm/test_charts.py` | `helm/` |
+| T1.1.3 | Package each service as Helm chart | `helm install deepSightAI-Trinetra-main-api ./helm/main-api` succeeds | `tests/helm/test_charts.py` | `helm/` |
 | T1.1.4 | Set up ArgoCD for GitOps deployment | Pushing to Git auto-deploys to test cluster | `tests/gitops/test_argocd_sync.py` | `argocd-apps/` |
 | T1.1.5 | Validate K8s manifests with kubeval/Score | CI fails on invalid YAML | CI pipeline | GitHub Actions |
-| T1.1.6 | Test local k3d cluster deployment | `k3d cluster create clipsight-test` + ArgoCD deploys successfully | `tests/k8s/test_k3d.py` | N/A |
+| T1.1.6 | Test local k3d cluster deployment | `k3d cluster create deepSightAI-Trinetra-test` + ArgoCD deploys successfully | `tests/k8s/test_k3d.py` | N/A |
 
 #### Area 1.2: Authentication & Authorization (P0)
 **Dependencies**: T1.1.1-T1.1.4
@@ -172,14 +172,14 @@ Each task has:
 | Task | Description | Acceptance Criteria | Tests | Files |
 |------|-------------|-------------------|-------|-------|
 | T3.1.1 | Set up MkDocs with Material theme | `mkdocs serve` works locally, clean UI | Manual: site builds without errors | `mkdocs.yml`, `docs/` structure |
-| T3.1.2 | Create product marketing landing page | Professional homepage explaining ClipSight value prop | Visual review: landing page looks polished | `docs/index.md` |
+| T3.1.2 | Create product marketing landing page | Professional homepage explaining deepSightAI Trinetra value prop | Visual review: landing page looks polished | `docs/index.md` |
 | T3.1.3 | Write quickstart guide (5-min eval) | User can deploy Docker Compose and search first video in <10 min | Test by non-dev colleague can complete | `docs/quickstart.md` |
 | T3.1.4 | Write installation guide (Docker vs K8s) | Clear steps for both on-premise and cloud deployments | Follow along with fresh install | `docs/installation/docker-compose.md`, `docs/installation/kubernetes.md` |
 | T3.1.5 | Write user guide (UI walkthrough, API) | Covers upload, search, results interpretation | All features documented with screenshots | `docs/user-guide/` |
 | T3.1.6 | Write operations guide (monitoring, backup, troubleshooting) | Ops can monitor health, backup DB, restore | Include Prometheus alerts, Grafana dashboards | `docs/operations/` |
 | T3.1.7 | Create architecture diagrams | High-level component diagram, data flow, security model | Diagrams in `docs/assets/diagrams/` | `docs/architecture/diagrams.md` |
 | T3.1.8 | Generate API reference from OpenAPI | Auto-generated API docs with examples | `mkdocs.yml` includes `mkdocs-openapi-plugin` | `docs/api/` |
-| T3.1.9 | Deploy documentation to GitHub Pages | Site live at `https://username.github.io/clipsight` | Automated via `mkdocs gh-deploy` in CI | GitHub Actions workflow |
+| T3.1.9 | Deploy documentation to GitHub Pages | Site live at `https://username.github.io/deepSightAI-Trinetra` | Automated via `mkdocs gh-deploy` in CI | GitHub Actions workflow |
 | T3.1.10 | Add versioned documentation support | v1.0, v1.1, latest, stable navigation | `mkdocs-versions` plugin configured | `docs/` + CI config |
 
 ---

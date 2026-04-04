@@ -1,7 +1,7 @@
 """
 T2.1.1: DetectionPlugin base class
 
-Abstract base class for all detection plugins in ClipSight.
+Abstract base class for all detection plugins in deepSightAI Trinetra.
 """
 
 from abc import ABC, abstractmethod

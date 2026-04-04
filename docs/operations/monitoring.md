@@ -1,12 +1,12 @@
 # Monitoring & Alerting
 
-This guide covers setting up monitoring, metrics collection, and alerting for ClipSight production deployments.
+This guide covers setting up monitoring, metrics collection, and alerting for deepSightAI Trinetra production deployments.
 
 ---
 
 ## Overview
 
-ClipSight exposes Prometheus metrics on all services. Recommended stack:
+deepSightAI Trinetra exposes Prometheus metrics on all services. Recommended stack:
 
 - **Metrics collection**: Prometheus
 - **Visualization**: Grafana dashboards
@@ -24,17 +24,17 @@ All services expose `/metrics` endpoint (no auth in default config, but you shou
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `clipsight_api_requests_total` | Counter | Total API requests by path, method, status |
-| `clipsight_api_request_duration_seconds` | Histogram | Request latency distribution |
-| `clipsight_api_active_requests` | Gauge | Currently processing requests |
-| `clipsight_videos_uploaded_total` | Counter | Total videos uploaded |
-| `clipsight_searches_performed_total` | Counter | Total search queries |
-| `clipsight_search_results_count` | Histogram | Number of results returned |
+| `deepSightAI-Trinetra_api_requests_total` | Counter | Total API requests by path, method, status |
+| `deepSightAI-Trinetra_api_request_duration_seconds` | Histogram | Request latency distribution |
+| `deepSightAI-Trinetra_api_active_requests` | Gauge | Currently processing requests |
+| `deepSightAI-Trinetra_videos_uploaded_total` | Counter | Total videos uploaded |
+| `deepSightAI-Trinetra_searches_performed_total` | Counter | Total search queries |
+| `deepSightAI-Trinetra_search_results_count` | Histogram | Number of results returned |
 
 Example query: "95th percentile search latency over 1 hour"
 
 ```promql
-histogram_quantile(0.95, rate(clipsight_search_results_count_bucket[1h]))
+histogram_quantile(0.95, rate(deepSightAI-Trinetra_search_results_count_bucket[1h]))
 ```
 
 ---
@@ -43,11 +43,11 @@ histogram_quantile(0.95, rate(clipsight_search_results_count_bucket[1h]))
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `clipsight_extractor_frames_extracted_total` | Counter | Total frames extracted |
-| `clipsight_extractor_processing_seconds` | Histogram | Time to extract one segment |
-| `clipsight_extractor_queue_depth` | Gauge | Number of segments waiting |
-| `clipsight_extractor_active_workers` | Gauge | Number of extractor pods available |
-| `clipsight_extractor_errors_total` | Counter | Extraction failures by reason |
+| `deepSightAI-Trinetra_extractor_frames_extracted_total` | Counter | Total frames extracted |
+| `deepSightAI-Trinetra_extractor_processing_seconds` | Histogram | Time to extract one segment |
+| `deepSightAI-Trinetra_extractor_queue_depth` | Gauge | Number of segments waiting |
+| `deepSightAI-Trinetra_extractor_active_workers` | Gauge | Number of extractor pods available |
+| `deepSightAI-Trinetra_extractor_errors_total` | Counter | Extraction failures by reason |
 
 ---
 
@@ -55,11 +55,11 @@ histogram_quantile(0.95, rate(clipsight_search_results_count_bucket[1h]))
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `clipsight_embedder_frames_embedded_total` | Counter | Total frames processed |
-| `clipsight_embedder_batch_duration_seconds` | Histogram | Time per batch |
-| `clipsight_embedder_queue_depth` | Gauge | Frames waiting in MinIO |
-| `clipsight_embedder_memory_usage_bytes` | Gauge | RAM consumption |
-| `clipsight_embedder_inference_seconds` | Histogram | CLIP model inference time |
+| `deepSightAI-Trinetra_embedder_frames_embedded_total` | Counter | Total frames processed |
+| `deepSightAI-Trinetra_embedder_batch_duration_seconds` | Histogram | Time per batch |
+| `deepSightAI-Trinetra_embedder_queue_depth` | Gauge | Frames waiting in MinIO |
+| `deepSightAI-Trinetra_embedder_memory_usage_bytes` | Gauge | RAM consumption |
+| `deepSightAI-Trinetra_embedder_inference_seconds` | Histogram | CLIP model inference time |
 
 ---
 
@@ -140,15 +140,15 @@ Configure Alertmanager to send notifications.
 
 ```yaml
 - alert: API_Down
-  expr: up{job="clipsight-api"} == 0
+  expr: up{job="deepSightAI-Trinetra-api"} == 0
   for: 2m
   annotations:
     severity: critical
-    summary: "ClipSight API is down"
+    summary: "deepSightAI Trinetra API is down"
     description: "API endpoint has been unreachable for >2 minutes"
     
 - alert: MilvusHighLatency
-  expr: histogram_quantile(0.99, rate(clipsight_milvus_search_duration_seconds_bucket[5m])) > 5
+  expr: histogram_quantile(0.99, rate(deepSightAI-Trinetra_milvus_search_duration_seconds_bucket[5m])) > 5
   for: 5m
   annotations:
     severity: critical
@@ -156,7 +156,7 @@ Configure Alertmanager to send notifications.
     description: "Users experiencing slow search"
     
 - alert: ExtractorQueueBlocked
-  expr: clipsight_extractor_queue_depth > 1000
+  expr: deepSightAI-Trinetra_extractor_queue_depth > 1000
   for: 10m
   annotations:
     severity: critical
@@ -182,7 +182,7 @@ Configure Alertmanager to send notifications.
     summary: "Database storage >90% full"
     
 - alert: HighErrorRate
-  expr: rate(clipsight_api_requests_total{status=~"5.."}[5m]) / rate(clipsight_api_requests_total[5m]) > 0.05
+  expr: rate(deepSightAI-Trinetra_api_requests_total{status=~"5.."}[5m]) / rate(deepSightAI-Trinetra_api_requests_total[5m]) > 0.05
   for: 5m
   annotations:
     severity: warning
@@ -340,9 +340,9 @@ For Kubernetes deployments:
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm install prometheus prometheus-community/kube-prometheus-stack -n monitoring --create-namespace
 
-# Add ServiceMonitor for ClipSight services (annotations on deployments)
-kubectl annotate deployment clipsight-api prometheus.io/scrape: "true"
-kubectl annotate deployment clipsight-api prometheus.io/port: "8080"
+# Add ServiceMonitor for deepSightAI Trinetra services (annotations on deployments)
+kubectl annotate deployment deepSightAI-Trinetra-api prometheus.io/scrape: "true"
+kubectl annotate deployment deepSightAI-Trinetra-api prometheus.io/port: "8080"
 ```
 
 Grafana will auto-discover dashboards from ConfigMap in `k8s/base/monitoring/`.
@@ -362,10 +362,10 @@ receivers:
     send_resolved: true
 - name: email-team
   email_configs:
-  - to: ops@clipsight.com
-    from: alertmanager@clipsight.com
+  - to: ops@deepSightAI-Trinetra.com
+    from: alertmanager@deepSightAI-Trinetra.com
     smarthost: smtp.gmail.com:587
-    auth_username: alertmanager@clipsight.com
+    auth_username: alertmanager@deepSightAI-Trinetra.com
     auth_password: APP_PASSWORD
 ```
 

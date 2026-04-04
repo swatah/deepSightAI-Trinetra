@@ -1,7 +1,7 @@
 replicaCount: 2
 
 image:
-  repository: clipsight/extractor
+  repository: deepSightAI-Trinetra/extractor
   tag: latest
   pullPolicy: IfNotPresent
 

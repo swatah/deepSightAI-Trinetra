@@ -1,5 +1,5 @@
 """
-AuditService - Immutable audit logging for ClipSight
+AuditService - Immutable audit logging for deepSightAI Trinetra
 T1.5.2: Create AuditService (FastAPI)
 """
 

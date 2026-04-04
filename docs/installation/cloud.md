@@ -46,4 +46,4 @@ All overlays inherit from `k8s/base/` and patch with:
 4. Set up monitoring and alerts
 5. Test with a video upload
 
-See [User Guide](user-guide/index.md) to start using ClipSight after deployment.
+See [User Guide](user-guide/index.md) to start using deepSightAI Trinetra after deployment.

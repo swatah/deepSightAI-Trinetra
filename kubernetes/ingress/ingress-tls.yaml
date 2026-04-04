@@ -5,7 +5,7 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: clipsight-main-ingress
+  name: deepSightAI-Trinetra-main-ingress
   namespace: default
   annotations:
     # Use NGINX Ingress Controller
@@ -28,11 +28,11 @@ metadata:
 spec:
   tls:
     - hosts:
-        - api.clipsight.local
-        - clipsight.local
-      secretName: clipsight-tls-secret
+        - api.deepSightAI-Trinetra.local
+        - deepSightAI-Trinetra.local
+      secretName: deepSightAI-Trinetra-tls-secret
   rules:
-    - host: api.clipsight.local
+    - host: api.deepSightAI-Trinetra.local
       http:
         paths:
           - path: /
@@ -42,7 +42,7 @@ spec:
                 name: main-api
                 port:
                   number: 8000
-    - host: clipsight.local
+    - host: deepSightAI-Trinetra.local
       http:
         paths:
           - path: /
@@ -58,7 +58,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: clipsight-default-redirect
+  name: deepSightAI-Trinetra-default-redirect
   namespace: default
   annotations:
     kubernetes.io/ingress.class: nginx
@@ -67,7 +67,7 @@ metadata:
     nginx.ingress.kubernetes.io/ssl-ciphers: "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256"
 spec:
   tls:
-    - secretName: clipsight-tls-secret
+    - secretName: deepSightAI-Trinetra-tls-secret
   rules:
     - http:
         paths:

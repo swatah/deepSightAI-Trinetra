@@ -76,7 +76,7 @@ class TestNetworkPolicies:
     def test_network_policies_target_correct_namespaces(self):
         """NetworkPolicies should be scoped to appropriate namespaces."""
         np_files = list(Path("kubernetes/network-policies").glob("*.yaml"))
-        # At least one policy should be in each relevant namespace (e.g., default, clipsight)
+        # At least one policy should be in each relevant namespace (e.g., default, deepSightAI-Trinetra)
         # We'll just check that all policies have a namespace field (or default) and are not invalid.
         namespaces = set()
         for np_file in np_files:

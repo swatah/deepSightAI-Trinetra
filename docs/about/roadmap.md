@@ -1,6 +1,6 @@
 # Product Roadmap
 
-ClipSight is under active development. This document outlines our planned features and releases.
+deepSightAI Trinetra is under active development. This document outlines our planned features and releases.
 
 **For the detailed enterprise roadmap with phases, milestones, and timelines, see the main project document:**
 
@@ -64,7 +64,7 @@ Each release includes:
 
 We prioritize development based on user feedback. To request a feature:
 
-1. Check existing [GitHub Issues](https://github.com/yourorg/clipsight/issues) to avoid duplicates
+1. Check existing [GitHub Issues](https://github.com/yourorg/deepSightAI-Trinetra/issues) to avoid duplicates
 2. Create a new issue with:
    - Clear description of the problem/use case
    - Proposed solution (optional)
@@ -107,8 +107,8 @@ Breaking changes will be announced with migration guides.
 
 Have questions or suggestions about the roadmap? 
 
-- Join our [Community Slack](https://clipsight-community.slack.com)
-- Start a [GitHub Discussion](https://github.com/yourorg/clipsight/discussions)
-- Email: **roadmap@clipsight.com**
+- Join our [Community Slack](https://deepSightAI-Trinetra-community.slack.com)
+- Start a [GitHub Discussion](https://github.com/yourorg/deepSightAI-Trinetra/discussions)
+- Email: **roadmap@deepSightAI-Trinetra.com**
 
 We appreciate your input as we build the future of video content search!

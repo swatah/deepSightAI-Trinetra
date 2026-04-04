@@ -18,7 +18,7 @@ def tenant_db_url():
     """
     database_url = os.getenv(
         "DATABASE_URL",
-        "postgresql://postgres:test@postgres-test:5432/clipsight_test"
+        "postgresql://postgres:test@postgres-test:5432/deepSightAI-Trinetra_test"
     )
     engine = create_engine(database_url)
 

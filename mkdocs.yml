@@ -1,8 +1,8 @@
-site_name: ClipSight Enterprise
+site_name: deepSightAI Trinetra Enterprise
 site_description: Vendor-neutral video content search with semantic AI
-site_author: ClipSight Team
-repo_url: https://github.com/yourorg/clipsight
-repo_name: yourorg/clipsight
+site_author: deepSightAI Trinetra Team
+repo_url: https://github.com/yourorg/deepSightAI-Trinetra
+repo_name: yourorg/deepSightAI-Trinetra
 
 theme:
   name: material
@@ -93,9 +93,9 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/yourorg/clipsight
+      link: https://github.com/yourorg/deepSightAI-Trinetra
     - icon: fontawesome/brands/docker
-      link: https://hub.docker.com/u/clipsight
+      link: https://hub.docker.com/u/trinetra
   version:
     provider: mike
     default:

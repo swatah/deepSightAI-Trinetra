@@ -1,6 +1,6 @@
 # Components Deep Dive
 
-Detailed documentation for each ClipSight component.
+Detailed documentation for each deepSightAI Trinetra component.
 
 ---
 
@@ -110,20 +110,20 @@ Run multiple replicas:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: clipsight-extractor
+  name: deepSightAI-Trinetra-extractor
 spec:
   replicas: 10  # Scale horizontally
   selector:
     matchLabels:
-      app: clipsight-extractor
+      app: deepSightAI-Trinetra-extractor
   template:
     metadata:
       labels:
-        app: clipsight-extractor
+        app: deepSightAI-Trinetra-extractor
     spec:
       containers:
       - name: extractor
-        image: clipsight/extractor:latest
+        image: deepSightAI-Trinetra/extractor:latest
         resources:
           requests:
             cpu: "500m"
@@ -291,7 +291,7 @@ s3://minio/frames/acme-corp/video1/segment_0001/frame-0001.jpg
 
 ### S3 API
 
-ClipSight uses `boto3` S3 client to talk to MinIO. MinIO presents S3-compatible endpoint.
+deepSightAI Trinetra uses `boto3` S3 client to talk to MinIO. MinIO presents S3-compatible endpoint.
 
 For production, you can replace MinIO with **AWS S3** or **Google Cloud Storage** by changing:
 - Endpoint URL
@@ -353,7 +353,7 @@ HSET extractor:extractor-001 status "busy"
 
 ### Databases
 
-- `clipsight` - main application metadata
+- `deepSightAI-Trinetra` - main application metadata
 - Per-tenant schemas (if using schema-per-tenant strategy)
 
 ### Tables

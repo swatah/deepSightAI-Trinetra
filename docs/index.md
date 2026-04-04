@@ -1,4 +1,4 @@
-# ClipSight Enterprise
+# deepSightAI Trinetra Enterprise
 
 <div class="grid cards" markdown>
 
@@ -54,15 +54,15 @@
 
 ---
 
-## What is ClipSight?
+## What is deepSightAI Trinetra?
 
-**ClipSight** is an enterprise-grade video content search platform that lets you find specific moments in hours of video footage using natural language queries. Simply upload a video, and ClipSight automatically:
+**deepSightAI Trinetra** is an enterprise-grade video content search platform that lets you find specific moments in hours of video footage using natural language queries. Simply upload a video, and deepSightAI Trinetra automatically:
 
 1. **Extracts frames** (1 per second) using GStreamer
 2. **Generates AI embeddings** with OpenCLIP (vision-language model)
 3. **Enables semantic search** - search for "red truck" or "person wearing helmet" without manual tagging
 
-### Who Uses ClipSight?
+### Who Uses deepSightAI Trinetra?
 
 - 🚓 **Law Enforcement**: Find suspects, vehicles, weapons in bodycam/security footage
 - 🏬 **Retail & Commercial**: Analyze customer behavior, queue lengths, demographics
@@ -114,8 +114,8 @@
 
 ```bash
 # 1. Clone and start
-git clone https://github.com/yourorg/clipsight.git
-cd clipsight
+git clone https://github.com/yourorg/deepSightAI-Trinetra.git
+cd deepSightAI-Trinetra
 docker-compose -f "Server and Extractor/docker-compose.extractor.yml" up -d
 docker-compose -f "Embedder/docker-compose.embedder.yaml" up -d
 
@@ -189,7 +189,7 @@ Read the [Security Architecture](architecture/security.md) for complete details.
 
 ## Open Source & Vendor-Neutral
 
-ClipSight is **100% open-source** (AGPL v3). We use only CNCF projects and open standards:
+deepSightAI Trinetra is **100% open-source** (AGPL v3). We use only CNCF projects and open standards:
 
 - **Kubernetes** for orchestration
 - **Helm** for packaging
@@ -215,7 +215,7 @@ No proprietary cloud services required. Deploy anywhere.
 
 - :octicons-beaker-16: **Developer?** See [Contributing Guide](about/contributing.md)
 
-- :octicons-people-16: **Need Help?** Check [FAQ](operations/faq.md) or [GitHub Issues](https://github.com/yourorg/clipsight/issues)
+- :octicons-people-16: **Need Help?** Check [FAQ](operations/faq.md) or [GitHub Issues](https://github.com/yourorg/deepSightAI-Trinetra/issues)
 
 </div>
 
@@ -223,9 +223,9 @@ No proprietary cloud services required. Deploy anywhere.
 
 ## Community & Support
 
-- **GitHub**: [github.com/yourorg/clipsight](https://github.com/yourorg/clipsight)
-- **Discussions**: [GitHub Discussions](https://github.com/yourorg/clipsight/discussions)
-- **Slack**: [clipsight-community.slack.com](https://clipsight-community.slack.com) (invite via website)
+- **GitHub**: [github.com/yourorg/deepSightAI-Trinetra](https://github.com/yourorg/deepSightAI-Trinetra)
+- **Discussions**: [GitHub Discussions](https://github.com/yourorg/deepSightAI-Trinetra/discussions)
+- **Slack**: [deepSightAI-Trinetra-community.slack.com](https://deepSightAI-Trinetra-community.slack.com) (invite via website)
 - **Docs**: This site is built with [MkDocs Material](https://squidfunk.github.io/mkdocs-material/)
 
 ---

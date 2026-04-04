@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Starting ClipSight Embedder Service..."
+echo "Starting deepSightAI Trinetra Embedder Service..."
 
 # Check if ONNX model exists, if not try to export it
 if [ ! -f "models/open_clip_vit_b32.onnx" ]; then

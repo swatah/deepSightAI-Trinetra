@@ -9,13 +9,13 @@ patchesStrategicMerge:
 # Add resource limits and requests tuned for production
 - resources-patch.yaml
 configMapGenerator:
-- name: clipsight-common-config
+- name: deepSightAI-Trinetra-common-config
   behavior: merge
   literals:
   - LOG_LEVEL=WARNING
   - ENABLE_METRICS=true
 secretGenerator:
-- name: clipsight-secrets
+- name: deepSightAI-Trinetra-secrets
   literals:
   - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}  # Must provide via env
   - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}

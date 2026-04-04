@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: clipsight/registry
+  repository: deepSightAI-Trinetra/registry
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -27,5 +27,5 @@ ingress:
   enabled: false
   annotations: {}
   hosts:
-    - host: registry.clipsight.local
+    - host: registry.deepSightAI-Trinetra.local
       paths: ["/"]

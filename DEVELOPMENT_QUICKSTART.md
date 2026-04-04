@@ -17,7 +17,7 @@ This guide gets you from zero to first commit in 10 minutes.
 
 ```bash
 # 1. Clone and setup (done)
-cd /path/to/clipsight
+cd /path/to/deepSightAI-Trinetra
 
 # 2. Initialize task tracking
 python scripts/tracking.py init
@@ -102,7 +102,7 @@ spec:
     spec:
       containers:
       - name: main-api
-        image: clipsight/main-api:latest
+        image: deepSightAI-Trinetra/main-api:latest
         ports:
         - containerPort: 8080
 EOF

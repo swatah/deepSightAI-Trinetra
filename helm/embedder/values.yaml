@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: clipsight/embedder
+  repository: deepSightAI-Trinetra/embedder
   tag: latest
   pullPolicy: IfNotPresent
 

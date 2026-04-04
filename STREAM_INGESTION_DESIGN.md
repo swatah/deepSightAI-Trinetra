@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-Current video ingestion in ClipSight is fragmented and lacks streaming semantics:
+Current video ingestion in deepSightAI Trinetra is fragmented and lacks streaming semantics:
 
 - **File uploads**: Uploaded to MinIO → Main API segments with FFmpeg → Dispatches to extractors (job-based)
 - **RTSP streams**: Main API dispatches to extractor → GStreamer pipeline directly reads RTSP

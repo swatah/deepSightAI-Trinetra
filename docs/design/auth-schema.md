@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document defines the database schema for multi-tenant authentication and authorization in ClipSight. The schema supports:
+This document defines the database schema for multi-tenant authentication and authorization in deepSightAI Trinetra. The schema supports:
 
 - Multi-tenancy with tenant isolation
 - Role-based access control (RBAC)

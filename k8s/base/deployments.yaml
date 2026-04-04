@@ -4,7 +4,7 @@ metadata:
   name: registry
   labels:
     app.kubernetes.io/name: registry
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
     app.kubernetes.io/version: "1.0.0"
 spec:
   replicas: 1
@@ -18,14 +18,14 @@ spec:
     spec:
       containers:
       - name: registry
-        image: clipsight/registry:latest
+        image: deepSightAI-Trinetra/registry:latest
         ports:
         - containerPort: 8000
         envFrom:
         - configMapRef:
-            name: clipsight-common-config
+            name: deepSightAI-Trinetra-common-config
         - secretRef:
-            name: clipsight-secrets
+            name: deepSightAI-Trinetra-secrets
         resources:
           requests:
             memory: "256Mi"
@@ -52,7 +52,7 @@ metadata:
   name: main-api
   labels:
     app.kubernetes.io/name: main-api
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
     app.kubernetes.io/version: "1.0.0"
 spec:
   replicas: 1
@@ -66,14 +66,14 @@ spec:
     spec:
       containers:
       - name: main-api
-        image: clipsight/main-api:latest
+        image: deepSightAI-Trinetra/main-api:latest
         ports:
         - containerPort: 8080
         envFrom:
         - configMapRef:
-            name: clipsight-common-config
+            name: deepSightAI-Trinetra-common-config
         - secretRef:
-            name: clipsight-secrets
+            name: deepSightAI-Trinetra-secrets
         resources:
           requests:
             memory: "512Mi"
@@ -100,7 +100,7 @@ metadata:
   name: extractor
   labels:
     app.kubernetes.io/name: extractor
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
     app.kubernetes.io/version: "1.0.0"
 spec:
   replicas: 2
@@ -114,21 +114,21 @@ spec:
     spec:
       containers:
       - name: extractor
-        image: clipsight/extractor:latest
+        image: deepSightAI-Trinetra/extractor:latest
         ports:
         - containerPort: 8001
         envFrom:
         - configMapRef:
-            name: clipsight-common-config
+            name: deepSightAI-Trinetra-common-config
         - secretRef:
-            name: clipsight-secrets
+            name: deepSightAI-Trinetra-secrets
         env:
         - name: EXTRACTOR_ID
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
         - name: EXTRACTOR_URL
-          value: "http://$(EXTRACTOR_ID).clipsight-platform.svc.cluster.local:8001"
+          value: "http://$(EXTRACTOR_ID).deepSightAI-Trinetra-platform.svc.cluster.local:8001"
         resources:
           requests:
             memory: "512Mi"
@@ -155,7 +155,7 @@ metadata:
   name: embedder
   labels:
     app.kubernetes.io/name: embedder
-    app.kubernetes.io/instance: clipsight
+    app.kubernetes.io/instance: deepSightAI-Trinetra
     app.kubernetes.io/version: "1.0.0"
 spec:
   replicas: 1
@@ -169,14 +169,14 @@ spec:
     spec:
       containers:
       - name: embedder
-        image: clipsight/embedder:latest
+        image: deepSightAI-Trinetra/embedder:latest
         ports:
         - containerPort: 8001
         envFrom:
         - configMapRef:
-            name: clipsight-common-config
+            name: deepSightAI-Trinetra-common-config
         - secretRef:
-            name: clipsight-secrets
+            name: deepSightAI-Trinetra-secrets
         resources:
           requests:
             memory: "2Gi"

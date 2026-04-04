@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Task tracking and progress management for ClipSight enterprise development.
+Task tracking and progress management for deepSightAI Trinetra enterprise development.
 Ensures no work is lost and every task is test-driven.
 """
 
@@ -414,7 +414,7 @@ Generated: {datetime.utcnow().isoformat()}
 def main():
     """CLI entry point."""
     import argparse
-    parser = argparse.ArgumentParser(description="Task tracking for ClipSight development")
+    parser = argparse.ArgumentParser(description="Task tracking for deepSightAI Trinetra development")
     subparsers = parser.add_subparsers(dest="command", help="Command")
 
     # init

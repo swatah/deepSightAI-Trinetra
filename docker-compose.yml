@@ -5,7 +5,7 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
-      POSTGRES_DB: clipsight
+      POSTGRES_DB: deepSightAI-Trinetra
     ports:
       - "5432:5432"
     volumes:
@@ -72,7 +72,7 @@ services:
       MINIO_URL: http://minio:9000
       MILVUS_HOST: milvus
       MILVUS_PORT: "19530"
-      POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/clipsight
+      POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/deepSightAI-Trinetra
     depends_on:
       registry:
         condition: service_healthy

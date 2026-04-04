@@ -1,6 +1,6 @@
 # Authentication & Authorization
 
-This guide covers authentication setup for ClipSight, including JWT tokens, API keys, and role-based access control (RBAC).
+This guide covers authentication setup for deepSightAI Trinetra, including JWT tokens, API keys, and role-based access control (RBAC).
 
 ---
 
@@ -12,7 +12,7 @@ In production deployments, **authentication is required** to:
 - Audit user actions
 - Control permissions via roles
 
-ClipSight supports:
+deepSightAI Trinetra supports:
 - **JWT Bearer tokens** (OAuth2/OIDC compatible)
 - **API Keys** (for programmatic access)
 - **OAuth2 social login** (Google, GitHub, Azure AD, Okta)
@@ -34,7 +34,7 @@ All methods ultimately yield a JWT token with claims identifying the user and te
 
 ```bash
 # Obtain JWT via OAuth2 client credentials flow
-curl -X POST https://auth.clipsight.com/oauth/token \
+curl -X POST https://auth.trinetra.com/oauth/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "client_id=YOUR_CLIENT_ID" \
   -d "client_secret=YOUR_CLIENT_SECRET" \
@@ -50,20 +50,20 @@ curl -X POST https://auth.clipsight.com/oauth/token \
 }
 
 # Use token:
-curl -H "Authorization: Bearer eyJhbGci..." https://api.clipsight.com/v1/videos
+curl -H "Authorization: Bearer eyJhbGci..." https://api.trinetra.com/v1/videos
 ```
 
 ---
 
 ## Token Format
 
-ClipSight uses **RS256** (RSA with SHA-256) signed JWTs.
+deepSightAI Trinetra uses **RS256** (RSA with SHA-256) signed JWTs.
 
 ### Claims
 
 | Claim | Type | Description |
 |-------|------|-------------|
-| `iss` | string | Issuer (e.g., `https://auth.clipsight.com`) |
+| `iss` | string | Issuer (e.g., `https://auth.trinetra.com`) |
 | `sub` | string | Subject (user ID or client ID) |
 | `aud` | string | Audience (expected API URL) |
 | `exp` | integer | Expiration timestamp (seconds since epoch) |
@@ -76,9 +76,9 @@ Example decoded JWT:
 
 ```json
 {
-  "iss": "https://auth.clipsight.com",
+  "iss": "https://auth.trinetra.com",
   "sub": "user_abc123",
-  "aud": "api.clipsight.com",
+  "aud": "api.deepSightAI-Trinetra.com",
   "exp": 1743751200,
   "iat": 1743664800,
   "tenant_id": "acme-corp",
@@ -102,7 +102,7 @@ For long-lived service accounts, create API keys:
 Use API key as `X-API-Key` header:
 
 ```bash
-curl -H "X-API-Key: clipsight_live_xxxxx" https://api.clipsight.com/v1/videos
+curl -H "X-API-Key: deepSightAI-Trinetra_live_xxxxx" https://api.trinetra.com/v1/videos
 ```
 
 API keys never expire (unless revoked). Store securely (vault, env vars).
@@ -151,7 +151,7 @@ Each JWT token contains `tenant_id`. All API requests are scoped to that tenant:
 
 ```bash
 # 1. Create user in AuthService (or IdP)
-curl -X POST https://auth.clipsight.com/admin/users \
+curl -X POST https://auth.trinetra.com/admin/users \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -d '{
     "email": "jane@acme.com",
@@ -168,11 +168,11 @@ curl -X POST https://auth.clipsight.com/admin/users \
 
 ### Service-to-Service Communication
 
-For microservices calling ClipSight API (e.g., your monitoring system), use service account:
+For microservices calling deepSightAI Trinetra API (e.g., your monitoring system), use service account:
 
 ```bash
 # Create service account key
-curl -X POST https://auth.clipsight.com/admin/api-keys \
+curl -X POST https://auth.trinetra.com/admin/api-keys \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -d '{
     "name": "monitoring-bot",
@@ -180,7 +180,7 @@ curl -X POST https://auth.clipsight.com/admin/api-keys \
     "roles": ["viewer"]
   }'
 
-# Response: {"api_key": "clipsight_live_xxxxx"}
+# Response: {"api_key": "deepSightAI-Trinetra_live_xxxxx"}
 ```
 
 Store key in Kubernetes Secret:
@@ -192,7 +192,7 @@ metadata:
   name: monitoring-credentials
 type: Opaque
 stringData:
-  clipsight-api-key: "clipsight_live_xxxxx"
+  deepSightAI-Trinetra-api-key: "deepSightAI-Trinetra_live_xxxxx"
 ```
 
 Your monitoring script:
@@ -201,9 +201,9 @@ Your monitoring script:
 import os
 import requests
 
-API_KEY = os.getenv("CLIPSIGHT_API_KEY")
+API_KEY = os.getenv("deepSightAI-Trinetra_API_KEY")
 response = requests.get(
-    "https://api.clipsight.com/v1/videos",
+    "https://api.trinetra.com/v1/videos",
     headers={"X-API-Key": API_KEY}
 )
 ```
@@ -287,5 +287,5 @@ TEST_TOKEN="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyX2FiYzEyMyIsInR
 
 - Configure authentication for your deployment: [Installation → Kubernetes](installation/kubernetes.md#7-configure-ingress)
 - Set up multi-tenancy: [Architecture → Tenancy](architecture/components.md#multi-tenancy)
-- Integrate with your IdP: [AuthService docs](https://github.com/yourorg/clipsight/tree/main/AuthService)
+- Integrate with your IdP: [AuthService docs](https://github.com/yourorg/deepSightAI-Trinetra/tree/main/AuthService)
 - Learn about [security architecture](architecture/security.md)

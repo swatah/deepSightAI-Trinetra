@@ -1,4 +1,4 @@
-# ClipSight Enterprise - Complete Documentation Index
+# deepSightAI Trinetra Enterprise - Complete Documentation Index
 
 **Quick Navigation**: Start with `SUMMARY.md` for comprehensive overview, or `DEVELOPMENT_QUICKSTART.md` to begin coding.
 
@@ -22,7 +22,7 @@
 ## Documentation Map
 
 ```
-ClipSight Documentation
+deepSightAI Trinetra Documentation
 ├── Getting Started
 │   ├── SUMMARY.md ⭐ (main hub)
 │   ├── DEVELOPMENT_QUICKSTART.md (first steps)
@@ -63,7 +63,7 @@ ClipSight Documentation
 
 ## What to Read When...
 
-### "I want to understand ClipSight"
+### "I want to understand deepSightAI Trinetra"
 **→ Read**: `ARCHITECTURE.md` (30 min)
 
 ### "I want to contribute code"
@@ -172,17 +172,17 @@ feat(auth): add JWT middleware with tenant extraction
 Once CI is set up, add to README:
 
 ```
-- **Tests**: [![CI](https://github.com/yourorg/clipsight/actions/workflows/ci.yml/badge.svg)](...)
-- **Coverage**: [![codecov](https://codecov.io/gh/yourorg/clipsight/branch/main/graph/badge.svg)](...)
+- **Tests**: [![CI](https://github.com/yourorg/deepSightAI-Trinetra/actions/workflows/ci.yml/badge.svg)](...)
+- **Coverage**: [![codecov](https://codecov.io/gh/yourorg/deepSightAI-Trinetra/branch/main/graph/badge.svg)](...)
 ```
 
 ---
 
 ## Support & Questions
 
-1. **Internal wiki**: [Confluence link to ClipSight space]
-2. **Slack**: #clipsight-dev, #clipsight-ops
-3. **Jira**: Project `CS` (ClipSight)
+1. **Internal wiki**: [Confluence link to deepSightAI Trinetra space]
+2. **Slack**: #deepSightAI-Trinetra-dev, #deepSightAI-Trinetra-ops
+3. **Jira**: Project `CS` (deepSightAI Trinetra)
 4. **Design docs**: `docs/design/` directory (create as needed)
 5. **Architecture decisions**: One `adr-*.md` file per major decision
 

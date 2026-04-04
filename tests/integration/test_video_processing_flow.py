@@ -29,7 +29,7 @@ def services():
         "redis_url": "redis://localhost:6379",
         "milvus_host": "localhost",
         "milvus_port": "19530",
-        "postgres_url": "postgresql://postgres:test@localhost:5432/clipsight_test",
+        "postgres_url": "postgresql://postgres:test@localhost:5432/deepSightAI-Trinetra_test",
         "api_url": "http://localhost:8080",
     }
 

@@ -18,7 +18,7 @@ services:
       - REDIS_URL=redis://redis-test:6379
       - MILVUS_HOST=milvus-test
       - MILVUS_PORT=19530
-      - DATABASE_URL=postgresql://postgres:test@postgres-test:5432/clipsight_test
+      - DATABASE_URL=postgresql://postgres:test@postgres-test:5432/deepSightAI-Trinetra_test
     # k3d needs Docker and may need privileged for network setup
     privileged: true
     depends_on:
@@ -57,7 +57,7 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_PASSWORD: test
-      POSTGRES_DB: clipsight_test
+      POSTGRES_DB: deepSightAI-Trinetra_test
     ports:
       - "5433:5432"
     healthcheck:

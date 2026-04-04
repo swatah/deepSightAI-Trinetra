@@ -1,8 +1,8 @@
 # API Reference
 
-Complete REST API documentation for ClipSight. All endpoints require authentication unless otherwise noted.
+Complete REST API documentation for deepSightAI Trinetra. All endpoints require authentication unless otherwise noted.
 
-Base URL: `https://api.clipsight.com/v1`
+Base URL: `https://api.trinetra.com/v1`
 
 Authentication: `Authorization: Bearer <JWT_TOKEN>` or `X-API-Key: <key>`
 
@@ -42,7 +42,7 @@ Error responses include JSON body:
 Authenticate with username/password (for interactive UI).
 
 ```bash
-curl -X POST https://auth.clipsight.com/auth/login \
+curl -X POST https://auth.trinetra.com/auth/login \
   -H "Content-Type: application/json" \
   -d '{
     "email": "user@example.com",
@@ -73,7 +73,7 @@ Response:
 Refresh expired JWT using refresh token.
 
 ```bash
-curl -X POST https://auth.clipsight.com/auth/refresh \
+curl -X POST https://auth.trinetra.com/auth/refresh \
   -H "Content-Type: application/json" \
   -d '{"refresh_token": "refresh_token_from_login"}'
 ```
@@ -85,7 +85,7 @@ curl -X POST https://auth.clipsight.com/auth/refresh \
 Revoke current token (requires valid refresh token).
 
 ```bash
-curl -X POST https://auth.clipsight.com/auth/logout \
+curl -X POST https://auth.trinetra.com/auth/logout \
   -H "Authorization: Bearer ACCESS_TOKEN"
 ```
 
@@ -150,7 +150,7 @@ List all videos for your tenant (paginated).
       "status": "ready",
       "duration_seconds": 3600,
       "frame_count": 3600,
-      "thumbnail_url": "https://minio.clipsight.com/frames/vid_abc/thumbnail.jpg",
+      "thumbnail_url": "https://minio.deepSightAI-Trinetra.com/frames/vid_abc/thumbnail.jpg",
       "uploaded_at": "2025-04-03T08:30:00Z",
       "tags": ["traffic", "north-entrance"],
       "metadata": {
@@ -269,8 +269,8 @@ Search for frames matching a text query.
       "timestamp_seconds": 45.2,
       "timestamp_formatted": "00:00:45",
       "similarity": 0.94,
-      "thumbnail_url": "https://minio.clipsight.com/frames/vid_abc/frame_00423.jpg",
-      "video_url": "https://minio.clipsight.com/videos/vid_abc.mp4"
+      "thumbnail_url": "https://minio.deepSightAI-Trinetra.com/frames/vid_abc/frame_00423.jpg",
+      "video_url": "https://minio.deepSightAI-Trinetra.com/videos/vid_abc.mp4"
     }
   ],
   "total_results": 156,
@@ -332,7 +332,7 @@ Execute multiple queries in one request.
 Create new tenant (admin only).
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/tenants \
+curl -X POST https://api.trinetra.com/v1/tenants \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -d '{
     "name": "Acme Corp",
@@ -356,7 +356,7 @@ List users in tenant (admin only).
 Add user to tenant.
 
 ```bash
-curl -X POST https://api.clipsight.com/v1/tenants/acme-corp/users \
+curl -X POST https://api.trinetra.com/v1/tenants/acme-corp/users \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -d '{
     "email": "newuser@acme.com",
@@ -394,11 +394,11 @@ Health check endpoint (no auth required in dev, may require in prod).
 Prometheus metrics endpoint (no auth).
 
 Key metrics:
-- `clipsight_api_requests_total`
-- `clipsight_api_request_duration_seconds`
-- `clipsight_videos_uploaded_total`
-- `clipsight_searches_performed_total`
-- `clipsight_frames_indexed_total`
+- `deepSightAI-Trinetra_api_requests_total`
+- `deepSightAI-Trinetra_api_request_duration_seconds`
+- `deepSightAI-Trinetra_videos_uploaded_total`
+- `deepSightAI-Trinetra_searches_performed_total`
+- `deepSightAI-Trinetra_frames_indexed_total`
 
 ---
 
@@ -407,7 +407,7 @@ Key metrics:
 Generate OpenAPI spec:
 
 ```bash
-curl https://api.clipsight.com/openapi.json > openapi.json
+curl https://api.trinetra.com/openapi.json > openapi.json
 ```
 
 Use with API clients (Swagger UI, Postman, Insomnia). Interactive docs available at `/docs` (Swagger UI) and `/redoc` (ReDoc) when running in development mode.
@@ -418,16 +418,16 @@ Use with API clients (Swagger UI, Postman, Insomnia). Interactive docs available
 
 Official SDKs:
 
-- **Python**: `pip install clipsight`
-- **JavaScript/TypeScript**: `npm install @clipsight/client`
+- **Python**: `pip install deepSightAI-Trinetra`
+- **JavaScript/TypeScript**: `npm install @deepSightAI-Trinetra/client`
 
 Example Python SDK:
 
 ```python
-from clipsight import Client
+from deepSightAI-Trinetra import Client
 
 client = Client(
-    api_url="https://api.clipsight.com",
+    api_url="https://api.trinetra.com",
     api_key="YOUR_API_KEY"
 )
 
@@ -457,14 +457,14 @@ Configure webhook URL in Tenant Settings to receive real-time notifications.
 | `video.error` | `{video_id, error_message}` |
 | `search.completed` | `{query, result_count, query_time_ms}` |
 
-POSTed to your configured URL with header `X-ClipSight-Signature` (HMAC-SHA256 of payload using webhook secret).
+POSTed to your configured URL with header `X-deepSightAI Trinetra-Signature` (HMAC-SHA256 of payload using webhook secret).
 
 Verify signature:
 
 ```python
 import hmac, hashlib
 
-signature = request.headers['X-ClipSight-Signature']
+signature = request.headers['X-deepSightAI Trinetra-Signature']
 expected = hmac.new(
     WEBHOOK_SECRET.encode(),
     request.body,
@@ -576,7 +576,7 @@ Responses available in:
 Accept header controls:
 
 ```bash
-curl -H "Accept: text/csv" https://api.clipsight.com/v1/videos > videos.csv
+curl -H "Accept: text/csv" https://api.trinetra.com/v1/videos > videos.csv
 ```
 
 ---
@@ -589,7 +589,7 @@ Python example with error handling:
 import requests
 from requests.exceptions import HTTPError
 
-API_URL = "https://api.clipsight.com/v1"
+API_URL = "https://api.trinetra.com/v1"
 TOKEN = "YOUR_JWT"
 
 headers = {"Authorization": f"Bearer {TOKEN}"}
@@ -623,10 +623,10 @@ def search_video(video_id, query):
 
 ## Testing the API
 
-Use the sandbox environment for testing: `https://sandbox-api.clipsight.com/v1`
+Use the sandbox environment for testing: `https://sandbox-api.deepSightAI-Trinetra.com/v1`
 
 Sandbox account credentials:
-- Email: `test@clipsight.dev`
+- Email: `test@deepSightAI-Trinetra.dev`
 - Password: `test-password`
 - Token: Request with `/auth/login`
 

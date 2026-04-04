@@ -56,8 +56,8 @@ All configuration uses **CNCF standards** and **open-source** tools:
 
 ```bash
 # 1. Clone repo
-git clone https://github.com/yourorg/clipsight.git
-cd clipsight
+git clone https://github.com/yourorg/deepSightAI-Trinetra.git
+cd deepSightAI-Trinetra
 
 # 2. Create environment file
 cp .env.example .env
@@ -66,7 +66,7 @@ cp .env.example .env
 #   REDIS_URL=redis://localhost:6379
 #   MILVUS_HOST=localhost
 #   MILVUS_PORT=19530
-#   POSTGRES_URL=postgresql://postgres:password@localhost:5432/clipsight
+#   POSTGRES_URL=postgresql://postgres:password@localhost:5432/deepSightAI-Trinetra
 
 # 3. Create docker-compose.yml (vendor-neutral, all self-contained)
 # This file is already in the repo at:
@@ -183,23 +183,23 @@ helm repo update
 
 # Deploy PostgreSQL (Bitnami chart - works everywhere)
 helm install postgres bitnami/postgresql \
-  --namespace clipsight-data \
+  --namespace deepSightAI-Trinetra-data \
   --create-namespace \
   --set auth.postgresPassword=$(openssl rand -base64 32) \
-  --set auth.database=clipsight \
+  --set auth.database=deepSightAI-Trinetra \
   --set primary.persistence.size=100Gi \
   --set replica.replicaCount=1
 
 # Deploy Redis (Bitnami)
 helm install redis bitnami/redis \
-  --namespace clipsight-data \
+  --namespace deepSightAI-Trinetra-data \
   --set auth.enabled=false \
   --set master.persistence.size=20Gi \
   --set replica.replicaCount=2
 
 # Deploy MinIO (distributed mode for HA)
 helm install minio minio/minio \
-  --namespace clipsight-data \
+  --namespace deepSightAI-Trinetra-data \
   --create-namespace \
   --set mode="distributed" \
   --set replicas=3 \
@@ -210,14 +210,14 @@ helm install minio minio/minio \
 
 # Deploy Milvus cluster
 helm install milvus milvus/milvus \
-  --namespace clipsight-data \
+  --namespace deepSightAI-Trinetra-data \
   --set cluster.enabled=true \
   --set cluster.replicas=3 \
   --set dependencies.etcd.type="builtin" \
-  --set dependencies.minio.endpoint="minio.clipsight-data.svc.cluster.local:9000" \
+  --set dependencies.minio.endpoint="minio.deepSightAI-Trinetra-data.svc.cluster.local:9000" \
   --set dependencies.minio.accessKeyID="minioadmin" \
   --set dependencies.minio.secretAccessKey="<minio-secret>" \
-  --set dependencies.minio.bucketName="clipsight-frames" \
+  --set dependencies.minio.bucketName="deepSightAI-Trinetra-frames" \
   --set milvus.storage.persistence.enabled=true \
   --set milvus.storage.persistence.storageClass="standard" \
   --set milvus.storage.persistence.size=500Gi
@@ -225,15 +225,15 @@ helm install milvus milvus/milvus \
 
 **Wait for all pods Ready**:
 ```bash
-kubectl get pods -n clipsight-data -w
+kubectl get pods -n deepSightAI-Trinetra-data -w
 ```
 
 ### Step 3: Deploy Application Services (Same Helm Charts)
 
-Create Helm chart for ClipSight (vendor-neutral):
+Create Helm chart for deepSightAI Trinetra (vendor-neutral):
 
 ```
-clipsight-helm/
+deepSightAI-Trinetra-helm/
 ├── Chart.yaml
 ├── values.yaml              # Default values
 ├── values-production.yaml   # Production overrides
@@ -285,15 +285,15 @@ kubectl apply -f k8s-manifests/
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: clipsight-common-config
-  namespace: clipsight-platform
+  name: deepSightAI-Trinetra-common-config
+  namespace: deepSightAI-Trinetra-platform
 data:
   common.env: |
-    MINIO_URL=http://minio.clipsight-data.svc.cluster.local:9000
+    MINIO_URL=http://minio.deepSightAI-Trinetra-data.svc.cluster.local:9000
     MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
     MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
-    REDIS_URL=redis://redis-cluster.clipsight-data.svc.cluster.local:6379
-    REGISTRY_URL=http://registry.clipsight-platform.svc.cluster.local:8000
+    REDIS_URL=redis://redis-cluster.deepSightAI-Trinetra-data.svc.cluster.local:6379
+    REGISTRY_URL=http://registry.deepSightAI-Trinetra-platform.svc.cluster.local:8000
 ```
 
 ```yaml
@@ -301,8 +301,8 @@ data:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: clipsight-secrets
-  namespace: clipsight-platform
+  name: deepSightAI-Trinetra-secrets
+  namespace: deepSightAI-Trinetra-platform
 type: Opaque
 stringData:
   postgres-password: "changeme"
@@ -318,7 +318,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: registry
-  namespace: clipsight-platform
+  namespace: deepSightAI-Trinetra-platform
 spec:
   replicas: 2
   selector:
@@ -331,14 +331,14 @@ spec:
     spec:
       containers:
       - name: registry
-        image: clipsight/registry:latest
+        image: deepSightAI-Trinetra/registry:latest
         ports:
         - containerPort: 8000
         envFrom:
         - configMapRef:
-            name: clipsight-common-config
+            name: deepSightAI-Trinetra-common-config
         - secretRef:
-            name: clipsight-secrets
+            name: deepSightAI-Trinetra-secrets
         resources:
           requests:
             memory: "256Mi"
@@ -378,18 +378,18 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/st
 kubectl port-forward svc/argocd-server 8080:443 -n argocd
 # Login: admin / (get password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
 
-# Create AppProject for clipsight
+# Create AppProject for deepSightAI-Trinetra
 cat > argocd-project.yaml <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
-  name: clipsight
+  name: deepSightAI-Trinetra
   namespace: argocd
 spec:
   sourceRepos:
-  - https://github.com/yourorg/clipsight-deploy.git
+  - https://github.com/yourorg/deepSightAI-Trinetra-deploy.git
   destinations:
-  - namespace: clipsight-*
+  - namespace: deepSightAI-Trinetra-*
     server: https://kubernetes.default.svc
   clusterResourceWhitelist:
   - group: '*'
@@ -402,19 +402,19 @@ cat > argocd-app.yaml <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: clipsight-production
+  name: deepSightAI-Trinetra-production
   namespace: argocd
   finalizers:
   - resources-finalizer.argocd.argoproj.io
 spec:
-  project: clipsight
+  project: deepSightAI-Trinetra
   source:
-    repoURL: https://github.com/yourorg/clipsight-deploy.git
+    repoURL: https://github.com/yourorg/deepSightAI-Trinetra-deploy.git
     targetRevision: main
     path: k8s/overlays/production
   destination:
     server: https://kubernetes.default.svc
-    namespace: clipsight-platform
+    namespace: deepSightAI-Trinetra-platform
   syncPolicy:
     automated:
       prune: true
@@ -430,7 +430,7 @@ kubectl apply -f argocd-app.yaml
 
 **GitOps structure**:
 ```
-clipsight-deploy/
+deepSightAI-Trinetra-deploy/
 ├── k8s/
 │   ├── base/                    # Kustomize bases (common to all envs)
 │   │   ├── configmap.yaml
@@ -455,7 +455,7 @@ clipsight-deploy/
 ├── helm/
 │   └── charts/                  # Optional: complex apps as Helm
 └── argocd-apps/
-    └── clipsight-production.yaml
+    └── deepSightAI-Trinetra-production.yaml
 ```
 
 **Now you can deploy to ANY K8s cluster** (k3s, EKS, GKE, AKS, OpenShift) with the **same Git repo**:
@@ -504,7 +504,7 @@ For multiple edge warehouses requiring local data sovereignty:
 
 ```bash
 # Create GKE cluster (same configs work on any cloud)
-gcloud container clusters create clipsight-prod \
+gcloud container clusters create deepSightAI-Trinetra-prod \
   --num-nodes=10 \
   --machine-type=n2-standard-8 \
   --disk-size=200 \
@@ -513,7 +513,7 @@ gcloud container clusters create clipsight-prod \
   --cluster-version=latest
 
 # Get credentials
-gcloud container clusters get-credentials clipsight-prod --region us-central1
+gcloud container clusters get-credentials deepSightAI-Trinetra-prod --region us-central1
 
 # Install ArgoCD (same as k3s)
 kubectl create namespace argocd
@@ -538,8 +538,8 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/st
 # 2. Create projects (namespaces)
 # 3. Deploy via ArgoCD or oc apply
 
-# oc new-project clipsight-platform
-# oc new-project clipsight-data
+# oc new-project deepSightAI-Trinetra-platform
+# oc new-project deepSightAI-Trinetra-data
 
 # kubectl apply -f k8s/  # works same as OpenShift
 # Or use ArgoCD for GitOps
@@ -590,7 +590,7 @@ kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/st
 |-------------|----------------|--------------|
 | **Docker Compose** | `docker-compose up -d` | Starts all containers on single host |
 | **k3s (edge)** | `kubectl apply -k k8s/overlays/development` | Deploys to k3s cluster with low resources |
-| **Full K8s (cloud)** | `argocd app sync clipsight-prod` | ArgoCD syncs from Git repo |
+| **Full K8s (cloud)** | `argocd app sync deepSightAI-Trinetra-prod` | ArgoCD syncs from Git repo |
 | **On-premise data center** | Same as Full K8s | Just change ArgoCD destination cluster URL |
 
 **Application code does NOT change**. Only infrastructure config.
@@ -616,7 +616,7 @@ Example: `k8s/overlays/production/kustomization.yaml`:
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: clipsight-platform
+namespace: deepSightAI-Trinetra-platform
 
 bases:
 - ../../base
@@ -628,17 +628,17 @@ patchesStrategicMerge:
 - ./patches/resources.yaml       # Production resource limits
 
 configMapGenerator:
-- name: clipsight-config
+- name: deepSightAI-Trinetra-config
   behavior: merge
   literals:
   - ENVIRONMENT=production
   - LOG_LEVEL=WARNING
-  - MINIO_URL=https://minio.clipsight.yourcompany.com
+  - MINIO_URL=https://minio.deepSightAI-Trinetra.yourcompany.com
   - JWT_SECRET=${JWT_SECRET}      # From env var
   - STRIPE_SECRET_KEY=${STRIPE_KEY}
 
 secretGenerator:
-- name: clipsight-secrets
+- name: deepSightAI-Trinetra-secrets
   literals:
   - postgres-password=${POSTGRES_PASSWORD}
   - redis-password=${REDIS_PASSWORD}
@@ -659,16 +659,16 @@ Example: Instead of Terraform AWS module for RDS, write:
 apiVersion: database.aws.crossplane.io/v1beta1
 kind: RDSInstance
 metadata:
-  name: clipsight-postgres
+  name: deepSightAI-Trinetra-postgres
 spec:
   forProvider:
     dbInstanceClass: db.r6g.2xlarge
-    dbName: clipsight
+    dbName: deepSightAI-Trinetra
     engine: postgres
     engineVersion: "15"
     masterUsername: postgres
     masterPasswordSecretRef:
-      name: clipsight-db-secret
+      name: deepSightAI-Trinetra-db-secret
       namespace: crossplane-system
       key: password
     allocatedStorage: 1000
@@ -677,10 +677,10 @@ spec:
     multiAZ: true
     publiclyAccessible: false
     vpcSecurityGroupIDRefs:
-    - name: clipsight-vpc-sg
+    - name: deepSightAI-Trinetra-vpc-sg
   writeConnectionSecretToRef:
-    name: clipsight-postgres-conn
-    namespace: clipsight-platform
+    name: deepSightAI-Trinetra-postgres-conn
+    namespace: deepSightAI-Trinetra-platform
 ```
 
 **This same YAML, with different provider, works on:**
@@ -709,7 +709,7 @@ Now you truly have:
 ## Deployment Decision Flowchart
 
 ```
-Need to deploy ClipSight?
+Need to deploy deepSightAI Trinetra?
 │
 ├─ Is this a single server (< 10 videos/day)?
 │  └─ YES → Use Docker Compose (Option A)
@@ -821,9 +821,9 @@ kubectl apply -f cluster-state.yaml  # Mostly works, adjust storage class, image
 1. `k8s/base/` - Common K8s manifests (no env-specific)
 2. `k8s/overlays/development/` - k3s/edge configuration
 3. `k8s/overlays/production/` - Enterprise configuration
-4. `helm/clipsight/Chart.yaml` - Helm chart for whole stack
-5. `helm/clipsight/values.yaml` - Default values
-6. `helm/clipsight/values-{env}.yaml` - Environment overrides
+4. `helm/deepSightAI-Trinetra/Chart.yaml` - Helm chart for whole stack
+5. `helm/deepSightAI-Trinetra/values.yaml` - Default values
+6. `helm/deepSightAI-Trinetra/values-{env}.yaml` - Environment overrides
 7. `argocd-apps/` - ArgoCD Application definitions
 8. `scripts/deploy.sh` - Unified deploy script (auto-detects environment)
 9. `INFRASTRUCTURE_ABSTRACTION.md` - Document how to add new clouds
@@ -898,7 +898,7 @@ You now have:
 ## Appendix: Full Example Repository Structure
 
 ```
-clipsight-deploy/
+deepSightAI-Trinetra-deploy/
 ├── README.md
 ├── environments/
 │   ├── development/          # k3s edge
@@ -931,17 +931,17 @@ clipsight-deploy/
 │       ├── milvus/
 │       └── monitoring/
 ├── helm/
-│   └── clipsight/            # Optional: package apps as Helm
+│   └── deepSightAI-Trinetra/            # Optional: package apps as Helm
 │       ├── Chart.yaml
 │       ├── values.yaml
 │       └── templates/
 ├── argocd/
 │   ├── projects/
-│   │   └── clipsight-project.yaml
+│   │   └── deepSightAI-Trinetra-project.yaml
 │   └── applications/
-│       ├── clipsight-dev.yaml
-│       ├── clipsight-staging.yaml
-│       └── clipsight-prod.yaml
+│       ├── deepSightAI-Trinetra-dev.yaml
+│       ├── deepSightAI-Trinetra-staging.yaml
+│       └── deepSightAI-Trinetra-prod.yaml
 ├── infrastructure/           # Crossplane (optional)
 │   ├── aws/
 │   ├── gcp/

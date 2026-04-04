@@ -58,9 +58,9 @@ server:
       value: "/etc/minio/tls/ca.crt"
     # Server TLS (HTTPS)
     - name: MINIO_DOMAIN
-      value: "minio.clipsight.local"
+      value: "minio.deepSightAI-Trinetra.local"
     - name: MINIO_SERVER_URL
-      value: "https://minio.clipsight.local"
+      value: "https://minio.deepSightAI-Trinetra.local"
   # TLS configuration (MinIO server HTTPS)
   tls:
     enabled: true

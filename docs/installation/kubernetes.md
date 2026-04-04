@@ -2,7 +2,7 @@
 
 **Best for**: Production deployments with 100+ videos/day, need for scalability and high availability
 
-This guide covers deploying ClipSight on Kubernetes using vendor-neutral manifests. Works on:
+This guide covers deploying deepSightAI Trinetra on Kubernetes using vendor-neutral manifests. Works on:
 - **k3s** (lightweight, edge/on-premise)
 - **k3d** (local development cluster)
 - **EKS** (AWS), **GKE** (Google Cloud), **AKS** (Azure)
@@ -62,7 +62,7 @@ Also includes:
 
 1. **Kubernetes cluster** (v1.24+)
    - k3s: `curl -sfL https://get.k3s.io | sh -`
-   - k3d (local): `k3d cluster create clipsight`
+   - k3d (local): `k3d cluster create deepSightAI-Trinetra`
    - EKS/GKE/AKS: Use cloud provider console/CLI
 
 2. **kubectl** configured with cluster context
@@ -111,13 +111,13 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.pas
 Then create ArgoCD Application pointing to your Git repo:
 
 ```bash
-kubectl apply -f argocd-apps/clipsight-main.yaml
+kubectl apply -f argocd-apps/deepSightAI-Trinetra-main.yaml
 ```
 
 ArgoCD will sync and deploy all components. Status visible in UI or:
 
 ```bash
-argocd app get clipsight
+argocd app get deepSightAI-Trinetra
 ```
 
 **To update**: Commit changes to Git → ArgoCD auto-deploys (or manual sync).
@@ -130,13 +130,13 @@ For quick testing or if you don't want GitOps:
 
 ```bash
 # Create namespace
-kubectl create namespace clipsight
+kubectl create namespace deepSightAI-Trinetra
 
 # Apply all base manifests
-kubectl apply -k k8s/overlays/development -n clipsight
+kubectl apply -k k8s/overlays/development -n deepSightAI-Trinetra
 
 # Or production:
-kubectl apply -k k8s/overlays/production -n clipsight
+kubectl apply -k k8s/overlays/production -n deepSightAI-Trinetra
 ```
 
 Use Kustomize overlays to customize per environment (different resource limits, replica counts, image tags).
@@ -225,8 +225,8 @@ Minimum secrets needed:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: clipsight-secrets
-  namespace: clipsight
+  name: deepSightAI-Trinetra-secrets
+  namespace: deepSightAI-Trinetra
 type: Opaque
 stringData:
   postgres-password: "CHANGE-ME-TO-STRONG-PASSWORD"
@@ -249,27 +249,27 @@ kubeval k8s/base/**/*.yaml
 kube-score score k8s/base/
 
 # Apply with Kustomize
-kubectl apply -k k8s/overlays/development -n clipsight
+kubectl apply -k k8s/overlays/development -n deepSightAI-Trinetra
 
 # Wait for all pods to be ready
-kubectl wait --for=condition=ready pod --all -n clipsight --timeout=600s
+kubectl wait --for=condition=ready pod --all -n deepSightAI-Trinetra --timeout=600s
 
 # Check status
-kubectl get all -n clipsight
+kubectl get all -n deepSightAI-Trinetra
 ```
 
 Expected output:
 
 ```
 NAME                              READY   STATUS    RESTARTS   AGE
-pod/clipsight-api-xxxx            1/1     Running   0          2m
-pod/clipsight-extractor-xxxx      1/1     Running   0          2m
-pod/clipsight-embedder-xxxx       1/1     Running   0          2m
-pod/clipsight-postgres-0          1/1     Running   0          3m
-pod/clipsight-redis-xxxx          1/1     Running   0          3m
-pod/clipsight-minio-0             1/1     Running   0          3m
-pod/clipsight-milvus-xxxx         1/1     Running   0          3m
-pod/clipsight-kafka-0             1/1     Running   0          3m
+pod/deepSightAI-Trinetra-api-xxxx            1/1     Running   0          2m
+pod/deepSightAI-Trinetra-extractor-xxxx      1/1     Running   0          2m
+pod/deepSightAI-Trinetra-embedder-xxxx       1/1     Running   0          2m
+pod/deepSightAI-Trinetra-postgres-0          1/1     Running   0          3m
+pod/deepSightAI-Trinetra-redis-xxxx          1/1     Running   0          3m
+pod/deepSightAI-Trinetra-minio-0             1/1     Running   0          3m
+pod/deepSightAI-Trinetra-milvus-xxxx         1/1     Running   0          3m
+pod/deepSightAI-Trinetra-kafka-0             1/1     Running   0          3m
 ```
 
 ---
@@ -279,32 +279,32 @@ pod/clipsight-kafka-0             1/1     Running   0          3m
 If you have an Ingress Controller (nginx, traefik, istio):
 
 ```bash
-kubectl apply -f k8s/ingress/clipsight-ingress.yaml -n clipsight
+kubectl apply -f k8s/ingress/deepSightAI-Trinetra-ingress.yaml -n deepSightAI-Trinetra
 ```
 
 For k3s with **Traefik** (built-in):
 
 ```bash
 # Traefik is already running; just create IngressRoute
-kubectl apply -f k8s/ingress/traefik-ingressroute.yaml -n clipsight
+kubectl apply -f k8s/ingress/traefik-ingressroute.yaml -n deepSightAI-Trinetra
 ```
 
 Then access:
-- API: http://api.clipsight.local (or your domain)
-- UI: http://ui.clipsight.local
+- API: http://api.deepSightAI-Trinetra.local (or your domain)
+- UI: http://ui.deepSightAI-Trinetra.local
 
 For local testing, add to `/etc/hosts`:
 
 ```
-127.0.0.1 api.clipsight.local
-127.0.0.1 ui.clipsight.local
+127.0.0.1 api.deepSightAI-Trinetra.local
+127.0.0.1 ui.deepSightAI-Trinetra.local
 ```
 
 Or use port-forward:
 
 ```bash
-kubectl port-forward svc/clipsight-api 8080:8080 -n clipsight
-kubectl port-forward svc/streamlit-ui 8501:8501 -n clipsight
+kubectl port-forward svc/deepSightAI-Trinetra-api 8080:8080 -n deepSightAI-Trinetra
+kubectl port-forward svc/streamlit-ui 8501:8501 -n deepSightAI-Trinetra
 ```
 
 ---
@@ -319,9 +319,9 @@ curl http://localhost:8080/health
 # {"status":"healthy","version":"1.0.0","timestamp":"..."}
 
 # Check logs of each component
-kubectl logs -f deployment/clipsight-api -n clipsight
-kubectl logs -f deployment/clipsight-extractor -n clipsight
-kubectl logs -f deployment/clipsight-embedder -n clipsight
+kubectl logs -f deployment/deepSightAI-Trinetra-api -n deepSightAI-Trinetra
+kubectl logs -f deployment/deepSightAI-Trinetra-extractor -n deepSightAI-Trinetra
+kubectl logs -f deployment/deepSightAI-Trinetra-embedder -n deepSightAI-Trinetra
 
 # Check metrics (if Prometheus installed)
 kubectl port-forward svc/prometheus-operated 9090:9090 -n monitoring
@@ -338,10 +338,10 @@ HPA configured for API and Extractor:
 
 ```bash
 # View metrics
-kubectl get hpa -n clipsight
+kubectl get hpa -n deepSightAI-Trinetra
 
 # Manual scaling
-kubectl scale deployment clipsight-extractor --replicas=10 -n clipsight
+kubectl scale deployment deepSightAI-Trinetra-extractor --replicas=10 -n deepSightAI-Trinetra
 ```
 
 ### Cluster Autoscaling (cloud)
@@ -356,12 +356,12 @@ On EKS/GKE, enable Cluster Autoscaler to add nodes when Pods don't fit.
 
 ```bash
 # Backup
-kubectl exec -n clipsight deployment/clipsight-postgres -- \
-  pg_dump -U postgres clipsight > backup-$(date +%Y%m%d).sql
+kubectl exec -n deepSightAI-Trinetra deployment/deepSightAI-Trinetra-postgres -- \
+  pg_dump -U postgres deepSightAI-Trinetra > backup-$(date +%Y%m%d).sql
 
 # Restore
-kubectl exec -i -n clipsight deployment/clipsight-postgres -- \
-  psql -U postgres clipsight < backup-20250403.sql
+kubectl exec -i -n deepSightAI-Trinetra deployment/deepSightAI-Trinetra-postgres -- \
+  psql -U postgres deepSightAI-Trinetra < backup-20250403.sql
 ```
 
 For production, use **Velero** or cloud provider snapshots.
@@ -370,8 +370,8 @@ For production, use **Velero** or cloud provider snapshots.
 
 ```bash
 # mc (MinIO Client) must be installed locally
-mc alias set clipsight http://minio.clipsight.local ACCESS_KEY SECRET_KEY
-mc mirror clipsight/videos ./backup-minio-videos
+mc alias set deepSightAI-Trinetra http://minio.deepSightAI-Trinetra.local ACCESS_KEY SECRET_KEY
+mc mirror deepSightAI-Trinetra/videos ./backup-minio-videos
 ```
 
 Enable MinIO's built-in tiering to S3 for durability.
@@ -382,12 +382,12 @@ Enable MinIO's built-in tiering to S3 for durability.
 
 ```bash
 # Pull new images (if changed in manifests)
-kubectl rollout restart deployment/clipsight-api -n clipsight
-kubectl rollout restart deployment/clipsight-extractor -n clipsight
-kubectl rollout restart deployment/clipsight-embedder -n clipsight
+kubectl rollout restart deployment/deepSightAI-Trinetra-api -n deepSightAI-Trinetra
+kubectl rollout restart deployment/deepSightAI-Trinetra-extractor -n deepSightAI-Trinetra
+kubectl rollout restart deployment/deepSightAI-Trinetra-embedder -n deepSightAI-Trinetra
 
 # Monitor rollout
-kubectl rollout status deployment/clipsight-api -n clipsight
+kubectl rollout status deployment/deepSightAI-Trinetra-api -n deepSightAI-Trinetra
 ```
 
 Database migrations run automatically as init containers or on startup.
@@ -406,12 +406,12 @@ Create ServiceMonitor:
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: clipsight-metrics
-  namespace: clipsight
+  name: deepSightAI-Trinetra-metrics
+  namespace: deepSightAI-Trinetra
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: clipsight
+      app.kubernetes.io/name: deepSightAI-Trinetra
   endpoints:
   - port: metrics
     interval: 30s
@@ -456,7 +456,7 @@ spec:
 Limit inter-pod communication:
 
 ```bash
-kubectl apply -f k8s/network-policies/ -n clipsight
+kubectl apply -f k8s/network-policies/ -n deepSightAI-Trinetra
 ```
 
 Only allow:
@@ -471,7 +471,7 @@ Only allow:
 ### Pods stuck in Pending
 
 ```bash
-kubectl describe pod <pod-name> -n clipsight
+kubectl describe pod <pod-name> -n deepSightAI-Trinetra
 # Look for: insufficient resources, node selectors, taints
 ```
 
@@ -485,7 +485,7 @@ Common causes:
 Check logs:
 
 ```bash
-kubectl logs <pod-name> -n clipsight --previous
+kubectl logs <pod-name> -n deepSightAI-Trinetra --previous
 ```
 
 Common issues:
@@ -498,13 +498,13 @@ Common issues:
 Check DNS:
 
 ```bash
-kubectl exec -it <pod-name> -n clipsight -- nslookup postgres.clipsight.svc.cluster.local
+kubectl exec -it <pod-name> -n deepSightAI-Trinetra -- nslookup postgres.deepSightAI-Trinetra.svc.cluster.local
 ```
 
 Check NetworkPolicy:
 
 ```bash
-kubectl get networkpolicy -n clipsight
+kubectl get networkpolicy -n deepSightAI-Trinetra
 ```
 
 ---
@@ -535,13 +535,13 @@ See [Operations Guide](operations/monitoring.md) for details on each item.
 
 ```bash
 # Delete namespace (removes all resources)
-kubectl delete namespace clipsight
+kubectl delete namespace deepSightAI-Trinetra
 
 # Delete persistent volumes (WARNING: deletes all data!)
-kubectl delete pvc -n clipsight --all
+kubectl delete pvc -n deepSightAI-Trinetra --all
 
 # If using Helm charts:
-helm uninstall clipsight -n clipsight
+helm uninstall deepSightAI-Trinetra -n deepSightAI-Trinetra
 ```
 
 ---

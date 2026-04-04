@@ -106,7 +106,7 @@ main() {
     fi
 
     # Example rotations (in practice, read from config)
-    # rotate_database_password "clipsight" "postgres"
+    # rotate_database_password "deepSightAI-Trinetra" "postgres"
     # rotate_vault_token "embedder-api" 24
     # rotate_k8s_secrets "api-secret" "default"
 

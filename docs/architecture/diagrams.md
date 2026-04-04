@@ -1,6 +1,6 @@
 # Architecture Diagrams
 
-This page provides visual representations of ClipSight architecture for quick understanding.
+This page provides visual representations of deepSightAI Trinetra architecture for quick understanding.
 
 ---
 
@@ -13,7 +13,7 @@ graph TB
         Admin[Admin CLI]
     end
     
-    subgraph "ClipSight API Layer"
+    subgraph "deepSightAI Trinetra API Layer"
         API[Main API<br/>FastAPI 8080]
         Auth[AuthService<br/>JWT Validation]
     end
@@ -129,8 +129,8 @@ sequenceDiagram
 
 ```mermaid
 graph TB
-    subgraph "K8s Cluster: clipsight"
-        subgraph "Namespace: clipsight"
+    subgraph "K8s Cluster: deepSightAI-Trinetra"
+        subgraph "Namespace: deepSightAI-Trinetra"
             API[API Deployment<br/>Replicas: 3]
             Extract[Extractor<br/>Replicas: 10-50 (HPA)]
             Embed[Embedder<br/>Replicas: 1-5 (GPU)]
@@ -258,7 +258,7 @@ HNSW (Hierarchical Navigable Small World) enables sub-linear search: O(log n) co
 
 ```mermaid
 graph TB
-    subgraph "Docker Network: clipsight_default"
+    subgraph "Docker Network: deepSightAI-Trinetra_default"
         API[api:8080]
         Extract[extractor:8001]
         Embed[embedder:8002]
@@ -368,7 +368,7 @@ graph LR
 
 ```mermaid
 mindmap
-  root((ClipSight))
+  root((deepSightAI Trinetra))
     1[Phase 1: Foundation]
       1.1[K8s Manifests]
       1.2[Auth Service]

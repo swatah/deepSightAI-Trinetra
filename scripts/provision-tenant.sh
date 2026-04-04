@@ -2,7 +2,7 @@
 #
 # T1.3.7: Tenant provisioning script
 #
-# Provisions a new tenant in ClipSight:
+# Provisions a new tenant in deepSightAI Trinetra:
 # - Creates PostgreSQL schema (tenant_<id>)
 # - Runs migrations to create tables
 # - (Optional) Creates MinIO bucket for tenant data

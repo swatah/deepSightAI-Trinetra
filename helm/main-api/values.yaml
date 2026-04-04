@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: clipsight/main-api
+  repository: deepSightAI-Trinetra/main-api
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -12,7 +12,7 @@ config:
   MINIO_URL: http://minio:9000
   MILVUS_HOST: milvus
   MILVUS_PORT: "19530"
-  POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/clipsight
+  POSTGRES_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/deepSightAI-Trinetra
 
 resources:
   requests:
@@ -31,5 +31,5 @@ ingress:
   enabled: false
   annotations: {}
   hosts:
-    - host: api.clipsight.local
+    - host: api.deepSightAI-Trinetra.local
       paths: ["/"]

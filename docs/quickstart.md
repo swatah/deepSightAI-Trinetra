@@ -1,9 +1,9 @@
-# Quickstart: Evaluate ClipSight in 5 Minutes
+# Quickstart: Evaluate deepSightAI Trinetra in 5 Minutes
 
 This guide gets you from zero to first search result in under 10 minutes using Docker Compose on your laptop or a single server.
 
 **What you'll get**:
-- Running ClipSight stack (API, extractor, embedder, MinIO, Milvus, Redis, PostgreSQL)
+- Running deepSightAI Trinetra stack (API, extractor, embedder, MinIO, Milvus, Redis, PostgreSQL)
 - Web UI to upload videos and perform semantic search
 - Sample video processed and searchable
 
@@ -21,8 +21,8 @@ This guide gets you from zero to first search result in under 10 minutes using D
 ## Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/yourorg/clipsight.git
-cd clipsight
+git clone https://github.com/yourorg/deepSightAI-Trinetra.git
+cd deepSightAI-Trinetra
 ```
 
 ---
@@ -67,7 +67,7 @@ That's the Streamlit UI. You should see:
 
 ```
 ┌─────────────────────────────────────┐
-│          ClipSight Enterprise        │
+│          deepSightAI Trinetra Enterprise        │
 │  ┌─────────┐  ┌─────────┐          │
 │  │ Upload  │  │ Search  │          │
 │  └─────────┘  └─────────┘          │
@@ -191,10 +191,10 @@ http://localhost:9090/metrics
 ```
 
 Key metrics:
-- `clipsight_videos_processed_total`
-- `clipsight_frames_embedded_total`
-- `clipsight_search_queries_total`
-- `clipsight_api_request_duration_seconds`
+- `deepSightAI-Trinetra_videos_processed_total`
+- `deepSightAI-Trinetra_frames_embedded_total`
+- `deepSightAI-Trinetra_search_queries_total`
+- `deepSightAI-Trinetra_api_request_duration_seconds`
 
 ---
 
@@ -210,14 +210,14 @@ docker-compose -f "Server and Extractor/docker-compose.extractor.yml" down -v
 docker-compose -f "Embedder/docker-compose.embedder.yaml" down -v
 
 # Remove images
-docker rmi clipsight-api clipsight-extractor clipsight-embedder
+docker rmi deepSightAI-Trinetra-api deepSightAI-Trinetra-extractor deepSightAI-Trinetra-embedder
 ```
 
 ---
 
 ## What's Next?
 
-✅ You have a working ClipSight deployment! Next steps:
+✅ You have a working deepSightAI Trinetra deployment! Next steps:
 
 1. **Configure Authentication** (Optional but recommended)
    - See [Authentication Setup](user-guide/auth.md) for JWT/OAuth2
@@ -267,5 +267,5 @@ You need at least 8GB RAM. Free up memory or increase swap.
 
 More help:
 - [Troubleshooting Guide](operations/troubleshooting.md)
-- [GitHub Issues](https://github.com/yourorg/clipsight/issues)
-- [Community Slack](https://clipsight-community.slack.com)
+- [GitHub Issues](https://github.com/yourorg/deepSightAI-Trinetra/issues)
+- [Community Slack](https://deepSightAI-Trinetra-community.slack.com)

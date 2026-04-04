@@ -138,8 +138,8 @@ class TestK3DClusterDeployment:
         """ArgoCD applications should be configured for GitOps deployment."""
         argocd_dir = Path("argocd-apps")
         assert argocd_dir.exists(), "argocd-apps/ directory must exist"
-        assert (argocd_dir / "clipsight-staging.yaml").exists(), "Staging app missing"
-        assert (argocd_dir / "clipsight-production.yaml").exists(), "Production app missing"
+        assert (argocd_dir / "deepSightAI-Trinetra-staging.yaml").exists(), "Staging app missing"
+        assert (argocd_dir / "deepSightAI-Trinetra-production.yaml").exists(), "Production app missing"
 
     def test_minimal_docker_compose_for_local_dev_exists(self):
         """Optional: docker-compose.yml should exist for non-k3s local development."""
@@ -151,7 +151,7 @@ class TestK3DClusterDeployment:
     def test_docker_test_image_builds(self):
         """Test Docker image for running tests should build successfully."""
         result = subprocess.run(
-            ["docker", "build", "-t", "clipsight-test-check", "-f", "tests/Dockerfile.test", "."],
+            ["docker", "build", "-t", "deepSightAI-Trinetra-test-check", "-f", "tests/Dockerfile.test", "."],
             capture_output=True, text=True
         )
         # This might fail if Docker daemon isn't running, so skip gracefully

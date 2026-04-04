@@ -5,16 +5,16 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: clipsight-wildcard-cert
+  name: deepSightAI-Trinetra-wildcard-cert
   namespace: default
 spec:
-  secretName: clipsight-wildcard-tls
+  secretName: deepSightAI-Trinetra-wildcard-tls
   issuerRef:
     name: letsencrypt-prod
     kind: ClusterIssuer
   dnsNames:
-    - "*.clipsight.local"
-    - "clipsight.local"
+    - "*.deepSightAI-Trinetra.local"
+    - "deepSightAI-Trinetra.local"
   privateKey:
     algorithm: ECDSA
     size: 256

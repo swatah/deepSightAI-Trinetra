@@ -1,6 +1,6 @@
 # Security Architecture
 
-This page describes the security model of ClipSight: multi-tenancy, authentication, encryption, network policies, and audit logging.
+This page describes the security model of deepSightAI Trinetra: multi-tenancy, authentication, encryption, network policies, and audit logging.
 
 ---
 
@@ -99,8 +99,8 @@ payload = jwt.decode(
     token,
     public_key,
     algorithms=["RS256"],
-    audience="api.clipsight.com",
-    issuer="https://auth.clipsight.com"
+    audience="api.deepSightAI-Trinetra.com",
+    issuer="https://auth.trinetra.com"
 )
 
 # Extract claims
@@ -185,8 +185,8 @@ All external communication uses TLS 1.3:
 **Verification**:
 
 ```bash
-curl -I https://api.clipsight.com  # Should return 200, not 301 to http
-openssl s_client -connect api.clipsight.com:443 -tls1_3
+curl -I https://api.trinetra.com  # Should return 200, not 301 to http
+openssl s_client -connect api.deepSightAI-Trinetra.com:443 -tls1_3
 ```
 
 ---
@@ -208,7 +208,7 @@ ssl_key_file = '/etc/ssl/server.key'
 
 ```bash
 # Upload with SSE-KMS
-mc cp video.mp4 clipsight/videos/ --sse-kms aws:kms:KMS_KEY_ID
+mc cp video.mp4 deepSightAI-Trinetra/videos/ --sse-kms aws:kms:KMS_KEY_ID
 ```
 
 **Milvus**: Disk encryption at cloud provider level (EBS encryption, GCE PD encryption).
@@ -231,7 +231,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: clipsight-api
+      app: deepSightAI-Trinetra-api
   policyTypes:
   - Egress
   egress:
@@ -277,8 +277,8 @@ External traffic enters via Ingress Controller (nginx/traefik/alb) with:
 All secrets stored in Vault, NOT in Git.
 
 ```hcl
-# Vault policies for ClipSight
-path "secret/data/clipsight/*" {
+# Vault policies for deepSightAI Trinetra
+path "secret/data/deepSightAI-Trinetra/*" {
   capabilities = ["read"]
 }
 
@@ -293,19 +293,19 @@ Kubernetes External Secrets Operator fetches secrets at pod startup:
 apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
-  name: clipsight-db-secret
+  name: deepSightAI-Trinetra-db-secret
 spec:
   refreshInterval: "1h"
   secretStoreRef:
     name: vault-backend
     kind: SecretStore
   target:
-    name: clipsight-db-secret
+    name: deepSightAI-Trinetra-db-secret
     creationPolicy: Owner
   data:
   - secretKey: password
     remoteRef:
-      key: secret/data/clipsight/database
+      key: secret/data/deepSightAI-Trinetra/database
       property: postgres-password
 ```
 
@@ -419,7 +419,7 @@ If security incident suspected:
 4. **Remediate**: Patch vulnerabilities, rotate keys
 5. **Post-mortem**: Document lessons learned
 
-Contact: security@clipsight.com (24/7 on-call)
+Contact: security@deepSightAI-Trinetra.com (24/7 on-call)
 
 ---
 

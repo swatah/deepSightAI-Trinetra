@@ -1,8 +1,8 @@
-# ClipSight Enterprise Roadmap & Deployment Guide
+# deepSightAI Trinetra Enterprise Roadmap & Deployment Guide
 
 ## Executive Summary
 
-Transforming ClipSight from a single-tenant prototype to an enterprise-grade, multi-tenant SaaS platform serving millions of videos for diverse sectors (law enforcement, commercial, logistics) with security-first architecture.
+Transforming deepSightAI Trinetra from a single-tenant prototype to an enterprise-grade, multi-tenant SaaS platform serving millions of videos for diverse sectors (law enforcement, commercial, logistics) with security-first architecture.
 
 ---
 
@@ -848,7 +848,7 @@ CREATE TABLE tenant_quotas (
 
 ## Conclusion
 
-This roadmap transforms ClipSight from a functional prototype to an enterprise SaaS platform capable of:
+This roadmap transforms deepSightAI Trinetra from a functional prototype to an enterprise SaaS platform capable of:
 
 - ✅ Multi-tenancy with strict data isolation
 - ✅ Enterprise-grade security (encryption, audit, compliance)

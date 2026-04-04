@@ -2,7 +2,7 @@
 
 **Best for**: Evaluation, development, small deployments (< 10 videos/day)
 
-This guide covers deploying the entire ClipSight stack on a single machine using Docker Compose.
+This guide covers deploying the entire deepSightAI Trinetra stack on a single machine using Docker Compose.
 
 ---
 
@@ -51,8 +51,8 @@ All services communicate over Docker's internal network. Data persisted in Docke
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/yourorg/clipsight.git
-cd clipsight
+git clone https://github.com/yourorg/deepSightAI-Trinetra.git
+cd deepSightAI-Trinetra
 ```
 
 ### 2. Create Environment Configuration
@@ -77,7 +77,7 @@ EXTRACTOR_PORT=8001
 EMBEDDER_PORT=8002
 
 # Database
-POSTGRES_DB=clipsight
+POSTGRES_DB=deepSightAI-Trinetra
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=your-secure-password-change-this
 
@@ -120,13 +120,13 @@ Expected output:
 ```
 Name                          Command               State           Ports
 ------------------------------------------------------------------------------------------
-clipsight-api         uvicorn main_api:app ...   Up (healthy)   0.0.0.0:8080->8080/tcp
-clipsight-postgres    docker-entrypoint.sh ...   Up (healthy)   5432/tcp
-clipsight-redis       docker-entrypoint.sh ...   Up (healthy)   6379/tcp
-clipsight-minio       minio server /data ...     Up (healthy)   0.0.0.0:9090->9000/tcp
-clipsight-milvus      milvus run standalone ...  Up (healthy)   0.0.0.0:19530->19530/tcp
-clipsight-extractor   python extractor.py       Up (healthy)   8001/tcp
-clipsight-embedder    python embedder.py        Up (healthy)   8002/tcp
+deepSightAI-Trinetra-api         uvicorn main_api:app ...   Up (healthy)   0.0.0.0:8080->8080/tcp
+deepSightAI-Trinetra-postgres    docker-entrypoint.sh ...   Up (healthy)   5432/tcp
+deepSightAI-Trinetra-redis       docker-entrypoint.sh ...   Up (healthy)   6379/tcp
+deepSightAI-Trinetra-minio       minio server /data ...     Up (healthy)   0.0.0.0:9090->9000/tcp
+deepSightAI-Trinetra-milvus      milvus run standalone ...  Up (healthy)   0.0.0.0:19530->19530/tcp
+deepSightAI-Trinetra-extractor   python extractor.py       Up (healthy)   8001/tcp
+deepSightAI-Trinetra-embedder    python embedder.py        Up (healthy)   8002/tcp
 ```
 
 **Wait 60 seconds** for all services to fully initialize (especially Milvus needs time to load indexes).
@@ -146,7 +146,7 @@ curl http://localhost:8001/health
 curl http://localhost:9000/minio/health/live
 
 # Redis
-docker exec clipsight-redis redis-cli ping
+docker exec deepSightAI-Trinetra-redis redis-cli ping
 # Expected: PONG
 ```
 
@@ -173,18 +173,18 @@ All persistent data stored in Docker named volumes:
 
 ```bash
 # List volumes
-docker volume ls | grep clipsight
+docker volume ls | grep deepSightAI-Trinetra
 
 # Backup all volumes
-docker run --rm -v clipsight_postgres_data:/data -v $(pwd):/backup alpine \
+docker run --rm -v deepSightAI-Trinetra_postgres_data:/data -v $(pwd):/backup alpine \
   tar czf /backup/postgres-backup.tar.gz -C /data .
 ```
 
 Volumes created:
-- `clipsight_postgres_data` - Database files
-- `clipsight_minio_data` - Uploaded videos and frames
-- `clipsight_redis_data` - Cache and service registry
-- `clipsight_milvus_data` - Vector embeddings and indexes
+- `deepSightAI-Trinetra_postgres_data` - Database files
+- `deepSightAI-Trinetra_minio_data` - Uploaded videos and frames
+- `deepSightAI-Trinetra_redis_data` - Cache and service registry
+- `deepSightAI-Trinetra_milvus_data` - Vector embeddings and indexes
 
 ---
 
@@ -256,16 +256,16 @@ docker system prune -af --volumes
 
 ## Network Configuration
 
-Services communicate via Docker network `clipsight_default`. To inspect:
+Services communicate via Docker network `deepSightAI-Trinetra_default`. To inspect:
 
 ```bash
-docker network inspect clipsight_default
+docker network inspect deepSightAI-Trinetra_default
 ```
 
 To connect additional tools (like `kafkacat` for debugging):
 
 ```bash
-docker run -it --network clipsight_default --rm kafkacat -b kafka:9092 -L
+docker run -it --network deepSightAI-Trinetra_default --rm kafkacat -b kafka:9092 -L
 ```
 
 ---

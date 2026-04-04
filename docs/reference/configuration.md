@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This document lists all configuration options for ClipSight services, typically set via environment variables or configuration files.
+This document lists all configuration options for deepSightAI Trinetra services, typically set via environment variables or configuration files.
 
 ---
 
@@ -61,7 +61,7 @@ Environment variables for the main FastAPI service.
 ### `DATABASE_URL`
 
 - **Description**: PostgreSQL connection string
-- **Default**: `postgresql://postgres:postgres@postgres:5432/clipsight`
+- **Default**: `postgresql://postgres:postgres@postgres:5432/deepSightAI-Trinetra`
 - **Example**: `DATABASE_URL=postgresql://user:pass@host:5432/dbname`
 
 ### `REDIS_URL`
@@ -99,7 +99,7 @@ Environment variables for the main FastAPI service.
 
 - **Description**: URL of AuthService for token validation
 - **Default**: `http://auth-service:8000`
-- **Example**: `AUTH_SERVICE_URL=https://auth.clipsight.com`
+- **Example**: `AUTH_SERVICE_URL=https://auth.trinetra.com`
 
 ---
 
@@ -207,7 +207,7 @@ Environment variables for the main FastAPI service.
 
 - **Description**: Paths to RSA private/public key files
 - **Default**: `/run/secrets/jwt-private.pem` / `/run/secrets/jwt-public.pem`
-- **Example**: `JWT_PRIVATE_KEY_PATH=/etc/clipsight/jwt.key`
+- **Example**: `JWT_PRIVATE_KEY_PATH=/etc/deepSightAI-Trinetra/jwt.key`
 
 ### `JWT_EXPIRY_HOURS`
 
@@ -241,7 +241,7 @@ Environment variables for the main FastAPI service.
 
 - **Description**: Kafka topic for audit events
 - **Default**: `audit-logs`
-- **Example**: `AUDIT_KAFKA_TOPIC=clipsight-audit`
+- **Example**: `AUDIT_KAFKA_TOPIC=deepSightAI-Trinetra-audit`
 
 ### `AUDIT_RETENTION_DAYS`
 
@@ -318,13 +318,13 @@ See PostgreSQL documentation for:
 
 - **Description**: Paths to TLS certificate and private key
 - **Default**: none (HTTP only in dev)
-- **Example**: `TLS_CERT_PATH=/etc/ssl/certs/clipsight.crt`
+- **Example**: `TLS_CERT_PATH=/etc/ssl/certs/deepSightAI-Trinetra.crt`
 
 ### `VAULT_ADDR` / `VAULT_TOKEN`
 
 - **Description**: HashiCorp Vault connection for secrets management
 - **Default**: none
-- **Example**: `VAULT_ADDR=https://vault.clipsight.com`
+- **Example**: `VAULT_ADDR=https://vault.deepSightAI-Trinetra.com`
 
 ---
 

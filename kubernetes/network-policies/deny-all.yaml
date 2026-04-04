@@ -19,7 +19,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-all-egress-only
-  namespace: clipsight
+  namespace: deepSightAI-Trinetra
 spec:
   podSelector: {}
   policyTypes:

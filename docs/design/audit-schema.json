@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Audit Log Schema",
-  "description": "Schema for audit log entries in ClipSight",
+  "description": "Schema for audit log entries in deepSightAI Trinetra",
   "type": "object",
   "required": [
     "tenant_id",

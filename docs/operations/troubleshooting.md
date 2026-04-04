@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This guide helps diagnose and resolve common issues with ClipSight deployments.
+This guide helps diagnose and resolve common issues with deepSightAI Trinetra deployments.
 
 ---
 
@@ -12,7 +12,7 @@ Before diving into specific issues, run through these checks:
 - [ ] Services return 200 on health endpoints (`/health`)
 - [ ] Database connectivity (`psql`, or `kubectl exec postgres -- psql`)
 - [ ] Redis connectivity (`redis-cli ping`)
-- [ ] MinIO connectivity (`mc ls minio/clipsight/`)
+- [ ] MinIO connectivity (`mc ls minio/deepSightAI-Trinetra/`)
 - [ ] Milvus connectivity (`milvus-cli list collections`)
 - [ ] Sufficient disk space (`df -h`)
 - [ ] Sufficient memory (`free -h`, `docker stats`)
@@ -30,7 +30,7 @@ If any check fails, see the relevant section below.
 ```bash
 docker logs <container-name>
 # or
-kubectl logs <pod-name> -n clipsight
+kubectl logs <pod-name> -n deepSightAI-Trinetra
 ```
 
 **Common causes**:
@@ -89,13 +89,13 @@ kubectl logs <pod-name> -n clipsight
 
 2. Check extractor queue:
    ```bash
-   docker exec clipsight-redis redis-cli
+   docker exec deepSightAI-Trinetra-redis redis-cli
    > LLEN extractor_queue
    ```
 
 3. Check extractor logs:
    ```bash
-   docker logs clipsight-extractor
+   docker logs deepSightAI-Trinetra-extractor
    # Look for errors like "FFmpeg error", "MinIO connection failed"
    ```
 
@@ -194,7 +194,7 @@ export EMBEDDER_MODEL=openai/clip-vit-base-patch32  # instead of large
 
 2. **Verify queue exists** - Redis stream `frames_queue` should have pending entries
    ```bash
-   docker exec clipsight-redis redis-cli
+   docker exec deepSightAI-Trinetra-redis redis-cli
    > XLEN frames_queue
    ```
 
@@ -271,7 +271,7 @@ df -h /var/lib/postgresql
 # Clean up old backups, WAL files, or increase storage
 
 # Check table sizes
-SELECT pg_size_pretty(pg_database_size('clipsight'));
+SELECT pg_size_pretty(pg_database_size('deepSightAI-Trinetra'));
 ```
 
 ---
@@ -281,11 +281,11 @@ SELECT pg_size_pretty(pg_database_size('clipsight'));
 ### Connection refused
 
 ```bash
-docker exec clipsight-redis redis-cli ping
+docker exec deepSightAI-Trinetra-redis redis-cli ping
 # Should return PONG
 
 # If not, restart redis
-docker restart clipsight-redis
+docker restart deepSightAI-Trinetra-redis
 ```
 
 ### Out of memory
@@ -442,9 +442,9 @@ Set `LOG_LEVEL=DEBUG` environment variable for the service.
 Then view structured JSON logs:
 
 ```bash
-docker logs --follow clipsight-api | jq '.message'
+docker logs --follow deepSightAI-Trinetra-api | jq '.message'
 # Filter by level
-docker logs clipsight-api 2>&1 | grep '"level":"ERROR"'
+docker logs deepSightAI-Trinetra-api 2>&1 | grep '"level":"ERROR"'
 ```
 
 ### Distributed tracing (Jaeger)

@@ -1,12 +1,12 @@
 # Backup & Restore
 
-This guide covers procedures for backing up ClipSight data and restoring from backups in case of data loss, corruption, or disaster recovery scenarios.
+This guide covers procedures for backing up deepSightAI Trinetra data and restoring from backups in case of data loss, corruption, or disaster recovery scenarios.
 
 ---
 
 ## Overview
 
-ClipSight consists of several data stores that need to be backed up:
+deepSightAI Trinetra consists of several data stores that need to be backed up:
 
 1. **PostgreSQL** - Video metadata, user accounts, audit logs
 2. **MinIO** - Uploaded videos and extracted frames (object storage)
@@ -27,22 +27,22 @@ ClipSight consists of several data stores that need to be backed up:
 
 ```bash
 # Full database backup (plain text)
-docker exec clipsight-postgres pg_dump -U postgres clipsight > backup_$(date +%Y%m%d_%H%M%S).sql
+docker exec deepSightAI-Trinetra-postgres pg_dump -U postgres deepSightAI-Trinetra > backup_$(date +%Y%m%d_%H%M%S).sql
 
 # Compressed backup
-docker exec clipsight-postgres pg_dump -U postgres clipsight | gzip > backup_$(date +%Y%m%d_%H%M%S).sql.gz
+docker exec deepSightAI-Trinetra-postgres pg_dump -U postgres deepSightAI-Trinetra | gzip > backup_$(date +%Y%m%d_%H%M%S).sql.gz
 
 # Custom format (allows selective restore)
-docker exec clipsight-postgres pg_dump -U postgres -Fc clipsight > backup_$(date +%Y%m%d_%H%M%S).dump
+docker exec deepSightAI-Trinetra-postgres pg_dump -U postgres -Fc deepSightAI-Trinetra > backup_$(date +%Y%m%d_%H%M%S).dump
 ```
 
 **Restore**:
 ```bash
 # From plain text
-docker exec -i clipsight-postgres psql -U postgres clipsight < backup_20250403.sql
+docker exec -i deepSightAI-Trinetra-postgres psql -U postgres deepSightAI-Trinetra < backup_20250403.sql
 
 # From custom format
-docker exec clipsight-postgres pg_restore -U postgres -d clipsight backup_20250403.dump
+docker exec deepSightAI-Trinetra-postgres pg_restore -U postgres -d deepSightAI-Trinetra backup_20250403.dump
 ```
 
 ### Using pg_basebackup (for WAL archiving / PITR)
@@ -72,7 +72,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: postgres-backup-$(date +%Y%m%d)
-  namespace: clipsight
+  namespace: deepSightAI-Trinetra
 spec:
   template:
     spec:
@@ -81,7 +81,7 @@ spec:
         image: postgres:15
         command: ["/bin/sh", "-c"]
         args:
-          - pg_dump -h postgres -U $POSTGRES_PASSWORD clipsight | gzip > /backup/backup_$(date +%Y%m%d_%H%M%S).sql.gz
+          - pg_dump -h postgres -U $POSTGRES_PASSWORD deepSightAI-Trinetra | gzip > /backup/backup_$(date +%Y%m%d_%H%M%S).sql.gz
         env:
         - name: PGPASSWORD
           valueFrom:
@@ -122,11 +122,11 @@ mc replicate add source-bucket/ target-bucket/ --remote-bucket target-bucket --s
 
 ```bash
 # Mirror to another local directory or remote storage
-mc mirror /local/backup/path minio/clipsight/videos/
-mc mirror /local/backup/path minio/clipsight/frames/
+mc mirror /local/backup/path minio/deepSightAI-Trinetra/videos/
+mc mirror /local/backup/path minio/deepSightAI-Trinetra/frames/
 
 # With sync (deletes remote files that no longer exist locally - be careful!)
-mc mirror --overwrite --remove /backup minio/clipsight/
+mc mirror --overwrite --remove /backup minio/deepSightAI-Trinetra/
 ```
 
 ### 3. **S3 Batch Operations** (Large Scale)
@@ -137,7 +137,7 @@ For large deployments, use S3 Batch Copy to copy objects to backup bucket with l
 
 ```bash
 # Recursively copy back to MinIO
-mc mirror /backup minio/clipsight/
+mc mirror /backup minio/deepSightAI-Trinetra/
 ```
 
 ---
@@ -189,11 +189,11 @@ Here's a comprehensive backup script that can be scheduled via cron:
 
 ```bash
 #!/bin/bash
-# backup.sh - Full ClipSight backup
+# backup.sh - Full deepSightAI Trinetra backup
 
 set -euo pipefail
 
-BACKUP_DIR="/backup/clipsight/$(date +%Y/%m/%d)"
+BACKUP_DIR="/backup/deepSightAI-Trinetra/$(date +%Y/%m/%d)"
 MINIO_BACKUP_DIR="$BACKUP_DIR/minio"
 POSTGRES_BACKUP_DIR="$BACKUP_DIR/postgres"
 RETENTION_DAYS=30
@@ -205,11 +205,11 @@ mkdir -p "$MINIO_BACKUP_DIR" "$POSTGRES_BACKUP_DIR"
 
 # 1. PostgreSQL
 echo "Backing up PostgreSQL..."
-docker exec clipsight-postgres pg_dump -U postgres clipsight | gzip > "$POSTGRES_BACKUP_DIR/clipsight_$(date +%Y%m%d_%H%M%S).sql.gz"
+docker exec deepSightAI-Trinetra-postgres pg_dump -U postgres deepSightAI-Trinetra | gzip > "$POSTGRES_BACKUP_DIR/deepSightAI-Trinetra_$(date +%Y%m%d_%H%M%S).sql.gz"
 
 # 2. MinIO (mirror to backup location)
 echo "Backing up MinIO..."
-mc mirror --overwrite minio/clipsight/ "$MINIO_BACKUP_DIR/"
+mc mirror --overwrite minio/deepSightAI-Trinetra/ "$MINIO_BACKUP_DIR/"
 
 # 3. Milvus (optional - snapshot metadata)
 echo "Backing up Milvus metadata..."
@@ -220,11 +220,11 @@ echo ""
 
 # Cleanup old backups (retention policy)
 echo "Cleaning up backups older than $RETENTION_DAYS days..."
-find /backup/clipsight -type f -mtime +$RETENTION_DAYS -delete
+find /backup/deepSightAI-Trinetra -type f -mtime +$RETENTION_DAYS -delete
 echo "Cleanup complete"
 
 # Upload to cloud storage (optional)
-# aws s3 sync "$BACKUP_DIR" s3://clipsight-backups/$(date +%Y%m%d)/
+# aws s3 sync "$BACKUP_DIR" s3://deepSightAI-Trinetra-backups/$(date +%Y%m%d)/
 ```
 
 **Schedule via cron** (daily at 2am):
@@ -242,11 +242,11 @@ echo "Cleanup complete"
 2. **Deploy** using standard installation procedures (see [Installation Guide](../installation/docker-compose.md))
 3. **Restore PostgreSQL**:
    ```bash
-   zcat backup/postgres/clipsight_20250403.sql.gz | docker exec -i clipsight-postgres psql -U postgres clipsight
+   zcat backup/postgres/deepSightAI-Trinetra_20250403.sql.gz | docker exec -i deepSightAI-Trinetra-postgres psql -U postgres deepSightAI-Trinetra
    ```
 4. **Restore MinIO**:
    ```bash
-   mc mirror /backup/minio/ minio/clipsight/
+   mc mirror /backup/minio/ minio/deepSightAI-Trinetra/
    ```
 5. **Restore Milvus** (if backup exists):
    ```bash
@@ -265,7 +265,7 @@ To restore a single video's data:
 
 2. Restore video file from MinIO backup to MinIO live:
    ```bash
-   mc cp /backup/minio/videos/vid_abc123.mp4 minio/clipsight/videos/
+   mc cp /backup/minio/videos/vid_abc123.mp4 minio/deepSightAI-Trinetra/videos/
    ```
 
 3. Re-extract frames (trigger extractor manually):
@@ -331,8 +331,8 @@ docker-compose -f "Embedder/docker-compose.embedder.yaml" up -d
 sleep 60  # Wait for services
 
 # Restore backups
-zcat /backup/latest/postgres.sql.gz | docker exec -i test-postgres psql -U postgres clipsight
-mc mirror /backup/latest/minio/ minio/clipsight/
+zcat /backup/latest/postgres.sql.gz | docker exec -i test-postgres psql -U postgres deepSightAI-Trinetra
+mc mirror /backup/latest/minio/ minio/deepSightAI-Trinetra/
 
 # Smoke test
 curl http://localhost:8080/health
@@ -378,7 +378,7 @@ Backups may contain sensitive data. Encrypt them:
 
 ```bash
 # Encrypt with GPG
-gpg --encrypt --recipient ops@clipsight.com backup.sql.gz
+gpg --encrypt --recipient ops@deepSightAI-Trinetra.com backup.sql.gz
 
 # Or use age (modern, simpler)
 age -r keys.txt -o backup.sql.gz.age backup.sql.gz

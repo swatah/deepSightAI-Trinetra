@@ -8,7 +8,7 @@ This script runs periodically (via K8s CronJob) to archive audit logs older than
 
 Environment variables:
 - DATABASE_URL: PostgreSQL connection string
-- S3_BUCKET: S3 bucket for archival (e.g., clipsight-audit-archive)
+- S3_BUCKET: S3 bucket for archival (e.g., deepSightAI-Trinetra-audit-archive)
 - S3_PREFIX: Optional prefix within bucket (e.g., audit-logs)
 - AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY: AWS credentials (or use IAM role)
 - ARCHIVE_AFTER_DAYS: Days after which logs are archived (default: 90)
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
-S3_BUCKET = os.getenv("S3_BUCKET", "clipsight-audit-archive")
+S3_BUCKET = os.getenv("S3_BUCKET", "deepSightAI-Trinetra-audit-archive")
 S3_PREFIX = os.getenv("S3_PREFIX", "audit-logs")
 ARCHIVE_AFTER_DAYS = 90  # default, can be overridden by environment
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))

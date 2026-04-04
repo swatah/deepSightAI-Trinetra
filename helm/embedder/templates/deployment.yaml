@@ -29,9 +29,9 @@ spec:
           protocol: TCP
         envFrom:
         - configMapRef:
-            name: clipsight-common-config
+            name: deepSightAI-Trinetra-common-config
         - secretRef:
-            name: clipsight-secrets
+            name: deepSightAI-Trinetra-secrets
         env:
         - name: REDIS_URL
           value: {{ .Values.config.REDIS_URL | quote }}

@@ -29,16 +29,16 @@ spec:
           protocol: TCP
         envFrom:
         - configMapRef:
-            name: clipsight-common-config
+            name: deepSightAI-Trinetra-common-config
         - secretRef:
-            name: clipsight-secrets
+            name: deepSightAI-Trinetra-secrets
         env:
         - name: EXTRACTOR_ID
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
         - name: EXTRACTOR_URL
-          value: "http://$(EXTRACTOR_ID).clipsight-platform.svc.cluster.local:{{ .Values.service.port }}"
+          value: "http://$(EXTRACTOR_ID).deepSightAI-Trinetra-platform.svc.cluster.local:{{ .Values.service.port }}"
         - name: REGISTRY_URL
           value: {{ .Values.config.REGISTRY_URL | quote }}
         - name: MINIO_URL

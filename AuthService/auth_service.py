@@ -2,7 +2,7 @@
 AuthService - Authentication & Authorization Microservice
 
 FastAPI application handling user registration, login, JWT issuance, and
-authorization checks for multi-tenant ClipSight system.
+authorization checks for multi-tenant deepSightAI Trinetra system.
 
 RUN: uvicorn auth_service:app --host 0.0.0.0 --port 8000
 """
@@ -47,7 +47,7 @@ except ImportError:
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:devpassword@localhost:5432/clipsight"
+    "postgresql://postgres:devpassword@localhost:5432/deepSightAI-Trinetra"
 )
 
 # JWT Configuration - RS256 (asymmetric) for better security
@@ -372,7 +372,7 @@ class PasswordResetConfirm(BaseModel):
 
 app = FastAPI(
     title="AuthService",
-    description="Authentication & Authorization service for ClipSight",
+    description="Authentication & Authorization service for deepSightAI Trinetra",
     version="0.1.0"
 )
 

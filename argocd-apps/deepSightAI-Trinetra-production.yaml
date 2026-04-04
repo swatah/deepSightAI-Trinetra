@@ -2,22 +2,22 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: clipsight-staging
+  name: deepSightAI-Trinetra-production
   namespace: argocd
   labels:
-    app.kubernetes.io/name: clipsight-staging
-    app.kubernetes.io/part-of: clipsight
+    app.kubernetes.io/name: deepSightAI-Trinetra-production
+    app.kubernetes.io/part-of: deepSightAI-Trinetra
 spec:
-  project: staging
+  project: production
   source:
-    repoURL: https://github.com/swatah/ClipSight.git
+    repoURL: https://github.com/swatah/deepSightAI Trinetra.git
     targetRevision: main
-    path: k8s/overlays/development
+    path: k8s/overlays/production
     directory:
       recurse: true
   destination:
     server: https://kubernetes.default.svc
-    namespace: clipsight-staging
+    namespace: deepSightAI-Trinetra-production
   syncPolicy:
     automated:
       prune: true
@@ -25,12 +25,12 @@ spec:
     syncOptions:
     - CreateNamespace=true
     retry:
-      limit: 5
+      limit: 3
       backoff:
-        duration: 5s
+        duration: 10s
         factor: 2
-        maxDuration: 3m
-    timeout: 10m
+        maxDuration: 5m
+    timeout: 15m
   health:
     healthRule:
       get:

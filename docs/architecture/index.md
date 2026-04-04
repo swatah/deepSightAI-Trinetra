@@ -1,6 +1,6 @@
 # Architecture Overview
 
-ClipSight is a distributed system for semantic video search. This page provides a high-level view of the architecture and data flow.
+deepSightAI Trinetra is a distributed system for semantic video search. This page provides a high-level view of the architecture and data flow.
 
 For production deployments, see [Installation Guides](..//installation/kubernetes.md). For developers contributing code, see [Developer Guide](../development/contributing.md).
 
@@ -233,4 +233,4 @@ OpenTelemetry distributed tracing (optional, Jaeger).
 
 ---
 
-**Questions?** Check [FAQ](../operations/faq.md) or [GitHub Discussions](https://github.com/yourorg/clipsight/discussions).
+**Questions?** Check [FAQ](../operations/faq.md) or [GitHub Discussions](https://github.com/yourorg/deepSightAI-Trinetra/discussions).

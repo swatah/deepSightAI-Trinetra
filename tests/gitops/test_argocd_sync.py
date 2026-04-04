@@ -26,20 +26,20 @@ class TestArgoCDSetup:
 
     def test_staging_application_exists(self):
         """ArgoCD Application for staging environment must exist."""
-        app_path = Path("argocd-apps/clipsight-staging.yaml")
-        assert app_path.exists(), "Create file: argocd-apps/clipsight-staging.yaml"
+        app_path = Path("argocd-apps/deepSightAI-Trinetra-staging.yaml")
+        assert app_path.exists(), "Create file: argocd-apps/deepSightAI-Trinetra-staging.yaml"
 
     def test_production_application_exists(self):
         """ArgoCD Application for production environment must exist."""
-        app_path = Path("argocd-apps/clipsight-production.yaml")
-        assert app_path.exists(), "Create file: argocd-apps/clipsight-production.yaml"
+        app_path = Path("argocd-apps/deepSightAI-Trinetra-production.yaml")
+        assert app_path.exists(), "Create file: argocd-apps/deepSightAI-Trinetra-production.yaml"
 
     def test_application_has_required_fields(self):
         """ArgoCD Application must have required fields."""
         import yaml
 
         for env in ["staging", "production"]:
-            app_file = Path(f"argocd-apps/clipsight-{env}.yaml")
+            app_file = Path(f"argocd-apps/deepSightAI-Trinetra-{env}.yaml")
             with open(app_file) as f:
                 docs = list(yaml.safe_load_all(f))
 
@@ -57,8 +57,8 @@ class TestArgoCDSetup:
 
             # Required metadata
             assert "name" in metadata, f"Application name missing in {env}"
-            assert metadata["name"] == f"clipsight-{env}", \
-                f"App name should be clipsight-{env}"
+            assert metadata["name"] == f"deepSightAI-Trinetra-{env}", \
+                f"App name should be deepSightAI-Trinetra-{env}"
 
             # Required spec fields
             required_spec_fields = ["project", "source", "destination"]
@@ -70,7 +70,7 @@ class TestArgoCDSetup:
         import yaml
 
         for env in ["staging", "production"]:
-            app_file = Path(f"argocd-apps/clipsight-{env}.yaml")
+            app_file = Path(f"argocd-apps/deepSightAI-Trinetra-{env}.yaml")
             with open(app_file) as f:
                 docs = list(yaml.safe_load_all(f))
 
@@ -94,7 +94,7 @@ class TestArgoCDSetup:
         import yaml
 
         for env in ["staging", "production"]:
-            app_file = Path(f"argocd-apps/clipsight-{env}.yaml")
+            app_file = Path(f"argocd-apps/deepSightAI-Trinetra-{env}.yaml")
             with open(app_file) as f:
                 docs = list(yaml.safe_load_all(f))
 
@@ -117,7 +117,7 @@ class TestArgoCDSetup:
         import yaml
 
         for env in ["staging", "production"]:
-            app_file = Path(f"argocd-apps/clipsight-{env}.yaml")
+            app_file = Path(f"argocd-apps/deepSightAI-Trinetra-{env}.yaml")
             with open(app_file) as f:
                 docs = list(yaml.safe_load_all(f))
 
@@ -145,7 +145,7 @@ class TestArgoCDSetup:
         import yaml
 
         for env in ["staging", "production"]:
-            app_file = Path(f"argocd-apps/clipsight-{env}.yaml")
+            app_file = Path(f"argocd-apps/deepSightAI-Trinetra-{env}.yaml")
             with open(app_file) as f:
                 docs = list(yaml.safe_load_all(f))
 
@@ -164,7 +164,7 @@ class TestArgoCDSetup:
         import yaml
 
         for env in ["staging", "production"]:
-            app_file = Path(f"argocd-apps/clipsight-{env}.yaml")
+            app_file = Path(f"argocd-apps/deepSightAI-Trinetra-{env}.yaml")
             with open(app_file) as f:
                 docs = list(yaml.safe_load_all(f))
 
@@ -188,7 +188,7 @@ class TestArgoCDSetup:
         import yaml
 
         for env in ["staging", "production"]:
-            app_file = Path(f"argocd-apps/clipsight-{env}.yaml")
+            app_file = Path(f"argocd-apps/deepSightAI-Trinetra-{env}.yaml")
             with open(app_file) as f:
                 docs = list(yaml.safe_load_all(f))
 
@@ -209,7 +209,7 @@ class TestArgoCDSetup:
         import yaml
 
         for env in ["staging", "production"]:
-            app_file = Path(f"argocd-apps/clipsight-{env}.yaml")
+            app_file = Path(f"argocd-apps/deepSightAI-Trinetra-{env}.yaml")
             with open(app_file) as f:
                 try:
                     docs = list(yaml.safe_load_all(f))

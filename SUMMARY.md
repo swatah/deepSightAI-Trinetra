@@ -1,10 +1,10 @@
-# ClipSight Enterprise - Implementation Summary
+# deepSightAI Trinetra Enterprise - Implementation Summary
 
 ## What Changed & Why
 
 ### The Problem with the Original Architecture
 
-The original ClipSight was a great prototype but had critical limitations:
+The original deepSightAI Trinetra was a great prototype but had critical limitations:
 
 1. **Docker Compose only** - No orchestration, can't scale beyond one host
 2. **Vendor lock-in risk** - AWS-specific recommendations in roadmap (bad)
@@ -57,7 +57,7 @@ Docker Compose  →  same code  →   Any K8s (EKS/GKE/AKS/On-prem)
 | `k8s/overlays/development/` | Dev overlay (single node, minimal) |
 | `k8s/overlays/production/` | Production overlay (HA, HPA) |
 | `k8s/apps/` | Application deployments (registry, API, extractor, embedder) |
-| `helm/clipsight/` | Optional Helm chart for entire stack |
+| `helm/deepSightAI-Trinetra/` | Optional Helm chart for entire stack |
 | `argocd-apps/` | ArgoCD Application definitions |
 | `scripts/provision-tenant.sh` | Multi-tenant provisioning script |
 | `AuthService/` | New authentication microservice |
@@ -123,7 +123,7 @@ Docker Compose  →  same code  →   Any K8s (EKS/GKE/AKS/On-prem)
    - Take existing Docker Compose services
    - Convert to K8s YAML in `k8s/base/`
    - Create `k8s/overlays/development/` for k3s testing
-   - Test on single-node k3s cluster: `k3d cluster create clipsight-dev`
+   - Test on single-node k3s cluster: `k3d cluster create deepSightAI-Trinetra-dev`
    - Verify all services work identically
 
 2. **GitOps setup**:
@@ -132,7 +132,7 @@ Docker Compose  →  same code  →   Any K8s (EKS/GKE/AKS/On-prem)
    kubectl apply -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
    # Create ArgoCD App
-   kubectl apply -f argocd-apps/clipsight-staging.yaml
+   kubectl apply -f argocd-apps/deepSightAI-Trinetra-staging.yaml
    # ArgoCD auto-deploys from Git
    ```
 
@@ -379,14 +379,14 @@ git commit -m "$(python scripts/tracking.py commit-msg T1.1.1)"
 git push
 
 # Kubernetes
-k3d cluster create clipsight-dev                # Create dev cluster (one-time)
+k3d cluster create deepSightAI-Trinetra-dev                # Create dev cluster (one-time)
 kubectl apply -k k8s/overlays/development      # Deploy to dev
 kubectl get pods -A                             # Check status
 kubectl logs -f deployment/main-api            # Tail logs
 
 # GitOps
-argocd app sync clipsight-staging              # Force sync
-argocd app logs clipsight-staging              # View app logs
+argocd app sync deepSightAI-Trinetra-staging              # Force sync
+argocd app logs deepSightAI-Trinetra-staging              # View app logs
 
 # Tracking
 python scripts/tracking.py list --phase=1      # List Phase 1 tasks

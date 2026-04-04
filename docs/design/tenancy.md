@@ -6,7 +6,7 @@
 
 ## Overview
 
-This document defines the multi-tenancy data isolation strategy for ClipSight. We need to ensure that **tenant data is completely isolated** at the database level, with zero chance of cross-tenant data leakage.
+This document defines the multi-tenancy data isolation strategy for deepSightAI Trinetra. We need to ensure that **tenant data is completely isolated** at the database level, with zero chance of cross-tenant data leakage.
 
 ---
 
@@ -77,7 +77,7 @@ This document defines the multi-tenancy data isolation strategy for ClipSight. W
 
 ## Decision: **Schemas-per-Tenant** with Connection Pooling
 
-We choose **schemas-per-tenant** for ClipSight because:
+We choose **schemas-per-tenant** for deepSightAI Trinetra because:
 
 1. **Moderate tenant count**: We expect < 1000 tenants in early phases
 2. **Strong isolation**: Schema separation provides clear boundaries
@@ -113,7 +113,7 @@ from sqlalchemy.orm import sessionmaker
 import os
 
 # Base connection string (without database/schema)
-BASE_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/clipsight")
+BASE_DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/deepSightAI-Trinetra")
 
 # Connection pool for all tenants (shared)
 _engine_pool = {}

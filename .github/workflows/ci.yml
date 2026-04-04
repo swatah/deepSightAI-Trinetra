@@ -132,12 +132,12 @@ jobs:
 
     - name: Build test runner image
       run: |
-        docker build -t clipsight/tests:latest -f tests/Dockerfile.test .
+        docker build -t deepSightAI-Trinetra/tests:latest -f tests/Dockerfile.test .
 
     - name: Run unit tests in Docker
       run: |
         docker run --rm \
-          clipsight/tests:latest \
+          deepSightAI-Trinetra/tests:latest \
           pytest tests/ \
             -v \
             -x \
@@ -161,7 +161,7 @@ jobs:
         image: postgres:15-alpine
         env:
           POSTGRES_PASSWORD: test
-          POSTGRES_DB: clipsight_test
+          POSTGRES_DB: deepSightAI-Trinetra_test
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -215,7 +215,7 @@ jobs:
 
     - name: Run integration tests
       env:
-        DATABASE_URL: postgresql://postgres:test@localhost:5432/clipsight_test
+        DATABASE_URL: postgresql://postgres:test@localhost:5432/deepSightAI-Trinetra_test
         REDIS_URL: redis://localhost:6379
         MINIO_URL: http://localhost:9000
         MINIO_ACCESS_KEY: minioadmin
@@ -272,9 +272,9 @@ jobs:
         VERSION=$(git rev-parse --short HEAD)
 
         for img in $IMAGES; do
-          docker build -t clipsight/$img:$VERSION -t clipsight/$img:latest -f Dockerfile.${img} .
-          docker push clipsight/$img:$VERSION
-          docker push clipsight/$img:latest
+          docker build -t deepSightAI-Trinetra/$img:$VERSION -t deepSightAI-Trinetra/$img:latest -f Dockerfile.${img} .
+          docker push deepSightAI-Trinetra/$img:$VERSION
+          docker push deepSightAI-Trinetra/$img:latest
         done
 
         echo "images-built=$VERSION" >> $GITHUB_OUTPUT
@@ -293,18 +293,18 @@ jobs:
     - name: Deploy to staging via ArgoCD
       run: |
         # Trigger ArgoCD sync for staging environment
-        kubectl apply -f argocd-apps/clipsight-staging.yaml
-        kubectl wait --for=condition=synced app/clipsight-staging -n argocd --timeout=300s
+        kubectl apply -f argocd-apps/deepSightAI-Trinetra-staging.yaml
+        kubectl wait --for=condition=synced app/deepSightAI-Trinetra-staging -n argocd --timeout=300s
       env:
         KUBECONFIG: ${{ secrets.KUBECONFIG_STAGING }}
 
     - name: Run smoke tests
       run: |
         # Wait for rollout
-        kubectl rollout status deployment/main-api -n clipsight-staging --timeout=180s
+        kubectl rollout status deployment/main-api -n deepSightAI-Trinetra-staging --timeout=180s
 
         # Run smoke tests
-        API_URL=$(kubectl get svc api-gateway -n clipsight-staging -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+        API_URL=$(kubectl get svc api-gateway -n deepSightAI-Trinetra-staging -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
         pytest tests/smoke/staging_smoke.py --api-url=https://$API_URL
       env:
         KUBECONFIG: ${{ secrets.KUBECONFIG_STAGING }}

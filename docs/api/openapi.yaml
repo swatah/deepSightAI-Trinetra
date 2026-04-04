@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
-  title: ClipSight API
+  title: deepSightAI Trinetra API
   description: |
     Video content search platform API. Perform semantic search on videos using natural language.
 
-    Base URL: `https://api.clipsight.com/v1`
+    Base URL: `https://api.trinetra.com/v1`
 
     Authentication: All endpoints (except health) require either:
     - `Authorization: Bearer <JWT_TOKEN>` header
@@ -13,17 +13,17 @@ info:
     For evaluation deployments with auth disabled, omit authentication headers.
   version: 1.0.0
   contact:
-    name: ClipSight Team
-    email: api@clipsight.com
-    url: https://github.com/yourorg/clipsight
+    name: deepSightAI Trinetra Team
+    email: api@deepSightAI-Trinetra.com
+    url: https://github.com/yourorg/deepSightAI-Trinetra
   license:
     name: AGPL v3
     url: https://www.gnu.org/licenses/agpl-3.0.en.html
 
 servers:
-  - url: https://api.clipsight.com/v1
+  - url: https://api.trinetra.com/v1
     description: Production API
-  - url: https://staging-api.clipsight.com/v1
+  - url: https://staging-api.trinetra.com/v1
     description: Staging API
   - url: http://localhost:8080/v1
     description: Local development (Docker Compose)
@@ -1103,7 +1103,7 @@ components:
           description: Challenge for authentication
           schema:
             type: string
-            example: Bearer realm="clipsight-api"
+            example: Bearer realm="deepSightAI-Trinetra-api"
 
     Forbidden:
       description: Insufficient permissions

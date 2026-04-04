@@ -1,24 +1,24 @@
 # Frequently Asked Questions
 
-Answers to common questions about deploying, using, and troubleshooting ClipSight.
+Answers to common questions about deploying, using, and troubleshooting deepSightAI Trinetra.
 
 ---
 
 ## General
 
-### What is ClipSight?
+### What is deepSightAI Trinetra?
 
-ClipSight is an open-source video content search platform that lets you find specific moments in hours of video footage using natural language queries. It uses AI (CLIP model) to understand video content without manual tagging.
+deepSightAI Trinetra is an open-source video content search platform that lets you find specific moments in hours of video footage using natural language queries. It uses AI (CLIP model) to understand video content without manual tagging.
 
-### Is ClipSight free?
+### Is deepSightAI Trinetra free?
 
-Yes! ClipSight is **open-source (AGPL v3)** and free to use, modify, and deploy. You can run it on your own infrastructure without licensing fees.
+Yes! deepSightAI Trinetra is **open-source (AGPL v3)** and free to use, modify, and deploy. You can run it on your own infrastructure without licensing fees.
 
-For commercial support, hosted solutions, or enterprise features, contact sales@clipsight.com.
+For commercial support, hosted solutions, or enterprise features, contact sales@deepSightAI-Trinetra.com.
 
-### What's the difference between ClipSight and traditional video analytics?
+### What's the difference between deepSightAI Trinetra and traditional video analytics?
 
-Traditional systems require **training custom models** for each detection scenario. ClipSight uses **natural language search** - just type what you're looking for without any training. It works out-of-the-box for common concepts (vehicles, people, colors, actions, scenes).
+Traditional systems require **training custom models** for each detection scenario. deepSightAI Trinetra uses **natural language search** - just type what you're looking for without any training. It works out-of-the-box for common concepts (vehicles, people, colors, actions, scenes).
 
 ### What video formats are supported?
 
@@ -31,11 +31,11 @@ RTSP streams are also supported for live cameras.
 
 ### How accurate is the search?
 
-ClipSight (using CLIP) achieves **70-90% precision** on common concepts (vehicles, people, indoor/outdoor, colors). It's not perfect - sometimes returns false positives. Best results come from:
+deepSightAI Trinetra (using CLIP) achieves **70-90% precision** on common concepts (vehicles, people, indoor/outdoor, colors). It's not perfect - sometimes returns false positives. Best results come from:
 - Specific queries: "red pickup truck" vs "vehicle"
 - Training/fine-tuning for your domain (coming in Phase 2 plugin system)
 
-### Can ClipSight run on CPU only?
+### Can deepSightAI Trinetra run on CPU only?
 
 Yes, but embedding generation is **~10x slower** on CPU vs GPU. Recommended:
 - Evaluation: CPU works for small batches (< 10 videos)
@@ -61,9 +61,9 @@ Yes, but embedding generation is **~10x slower** on CPU vs GPU. Recommended:
 - Milvus: Cluster mode with query/index nodes
 - MinIO: Distributed cluster (4+ nodes for production)
 
-### Can I run ClipSight in the cloud?
+### Can I run deepSightAI Trinetra in the cloud?
 
-Yes! ClipSight is cloud-agnostic. Deploy on:
+Yes! deepSightAI Trinetra is cloud-agnostic. Deploy on:
 - AWS (EKS, EC2)
 - Google Cloud (GKE)
 - Azure (AKS)
@@ -91,18 +91,18 @@ Example Nginx ingress:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: clipsight-ingress
+  name: deepSightAI-Trinetra-ingress
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
 spec:
   tls:
   - hosts:
-    - api.clipsight.com
-    - ui.clipsight.com
-    secretName: clipsight-tls
+    - api.deepSightAI-Trinetra.com
+    - ui.deepSightAI-Trinetra.com
+    secretName: deepSightAI-Trinetra-tls
   rules:
-  - host: api.clipsight.com
+  - host: api.deepSightAI-Trinetra.com
     http:
       paths:
       - path: /
@@ -116,7 +116,7 @@ spec:
 
 ### How do I set up authentication?
 
-ClipSight supports multiple auth methods:
+deepSightAI Trinetra supports multiple auth methods:
 
 1. **JWT** (default) - Users authenticate via AuthService, receive JWTs
 2. **API Keys** - For programmatic machine-to-machine access
@@ -125,7 +125,7 @@ ClipSight supports multiple auth methods:
 
 See [User Guide → Authentication](../user-guide/auth.md) for setup.
 
-### Can I run multiple ClipSight instances (multi-region)?
+### Can I run multiple deepSightAI Trinetra instances (multi-region)?
 
 Yes. Deploy separate clusters per region and:
 - Use MinIO replication for data sync
@@ -153,7 +153,7 @@ Factors affecting speed:
 
 ### Can I search for specific people or objects?
 
-ClipSight understands general concepts like "person", "car", "building", "red", "nighttime". But it **cannot** identify specific individuals (no facial recognition by default). For specialized detection (license plates, weapons, PPE), use the plugin system (Phase 2).
+deepSightAI Trinetra understands general concepts like "person", "car", "building", "red", "nighttime". But it **cannot** identify specific individuals (no facial recognition by default). For specialized detection (license plates, weapons, PPE), use the plugin system (Phase 2).
 
 ### What's the difference between frames and segments?
 
@@ -180,7 +180,7 @@ No, search results are derived from indexed embeddings. To remove content, delet
 
 ## Scaling & Performance
 
-### How many videos can ClipSight handle?
+### How many videos can deepSightAI Trinetra handle?
 
 Depends on your cluster size. Approximate capacity:
 
@@ -249,14 +249,14 @@ Set up Grafana dashboards and alerts.
 
 **Docker Compose**:
 ```bash
-docker logs clipsight-api
+docker logs deepSightAI-Trinetra-api
 docker logs --follow extractor
 ```
 
 **Kubernetes**:
 ```bash
-kubectl logs -f deployment/api -n clipsight
-kubectl logs -f statefulset/milvus -n clipsight
+kubectl logs -f deployment/api -n deepSightAI-Trinetra
+kubectl logs -f statefulset/milvus -n deepSightAI-Trinetra
 ```
 
 **Structured logs** are in JSON format by default.
@@ -274,8 +274,8 @@ docker-compose down && docker-compose up -d
 
 **Kubernetes**:
 ```bash
-kubectl set env deployment/api LOG_LEVEL=DEBUG -n clipsight
-kubectl rollout restart deployment/api -n clipsight
+kubectl set env deployment/api LOG_LEVEL=DEBUG -n deepSightAI-Trinetra
+kubectl rollout restart deployment/api -n deepSightAI-Trinetra
 ```
 
 ### Why is my search slow?
@@ -294,7 +294,7 @@ Common causes:
 ### Where is my data stored?
 
 - **PostgreSQL**: Metadata (users, videos, segments) in Docker volume or PVC
-- **MinIO**: Videos and frames in object storage (default: `clipsight/` bucket)
+- **MinIO**: Videos and frames in object storage (default: `deepSightAI-Trinetra/` bucket)
 - **Milvus**: Embeddings in vector database storage (local disk or cloud storage)
 - **Redis**: Cache and queues (ephemeral, stored in memory)
 
@@ -310,7 +310,7 @@ See [Backup & Restore](../operations/backup-restore.md) for details.
 
 ### Can I export my data?
 
-Yes. ClipSight is your data - you can export:
+Yes. deepSightAI Trinetra is your data - you can export:
 
 - **Videos**: Download from MinIO directly
 - **Frames**: Download from MinIO `frames/` prefix
@@ -323,12 +323,12 @@ For complete data erasure per GDPR Article 17:
 
 ```bash
 # 1. Delete from PostgreSQL
-psql clipsight -c "DELETE FROM videos WHERE tenant_id='tenant-to-delete';"
+psql deepSightAI-Trinetra -c "DELETE FROM videos WHERE tenant_id='tenant-to-delete';"
 # Also delete from audit_logs if needed (but those are WORM - may need to drop table)
 
 # 2. Delete from MinIO
-mc rm --recursive --force minio/clipsight/videos/tenant_to_delete/
-mc rm --recursive --force minio/clipsight/frames/tenant_to_delete/
+mc rm --recursive --force minio/deepSightAI-Trinetra/videos/tenant_to_delete/
+mc rm --recursive --force minio/deepSightAI-Trinetra/frames/tenant_to_delete/
 
 # 3. Delete from Milvus
 # Drop partitions or delete vectors with tenant_id filter
@@ -346,8 +346,8 @@ See [Contributing](../about/contributing.md) for development setup.
 
 Quick start:
 ```bash
-git clone https://github.com/yourorg/clipsight.git
-cd clipsight
+git clone https://github.com/yourorg/deepSightAI-Trinetra.git
+cd deepSightAI-Trinetra
 # Install dependencies in each service directory
 pip install -r Server\ and\ Extractor/requirements.txt
 pip install -r Embedder/requirements_embedder.txt
@@ -358,7 +358,7 @@ docker-compose -f "Server and Extractor/docker-compose.extractor.yml" up -d
 
 ### How do I add a new plugin?
 
-ClipSight plugin architecture is in Phase 2. See [Architecture → Components](../architecture/components.md#plugin-architecture) for design. Plugins are Python modules implementing a standard interface.
+deepSightAI Trinetra plugin architecture is in Phase 2. See [Architecture → Components](../architecture/components.md#plugin-architecture) for design. Plugins are Python modules implementing a standard interface.
 
 ### Where can I find API documentation?
 
@@ -368,11 +368,11 @@ Full API reference: [User Guide → API Reference](../user-guide/api.md) or auto
 
 ## Support & Community
 
-- **GitHub Issues**: [Report bugs/request features](https://github.com/yourorg/clipsight/issues)
-- **Discussions**: [Community questions](https://github.com/yourorg/clipsight/discussions)
-- **Slack**: [clipsight-community.slack.com](https://clipsight-community.slack.com)
+- **GitHub Issues**: [Report bugs/request features](https://github.com/yourorg/deepSightAI-Trinetra/issues)
+- **Discussions**: [Community questions](https://github.com/yourorg/deepSightAI-Trinetra/discussions)
+- **Slack**: [deepSightAI-Trinetra-community.slack.com](https://deepSightAI-Trinetra-community.slack.com)
 - **Documentation**: This site
-- **Commercial support**: support@clipsight.com
+- **Commercial support**: support@deepSightAI-Trinetra.com
 
 ---
 
@@ -382,7 +382,7 @@ If your question isn't answered here:
 
 1. Search the [documentation](../) thoroughly
 2. Check [Troubleshooting](../operations/troubleshooting.md)
-3. Ask in [GitHub Discussions](https://github.com/yourorg/clipsight/discussions)
-4. Join our [Slack community](https://clipsight-community.slack.com)
+3. Ask in [GitHub Discussions](https://github.com/yourorg/deepSightAI-Trinetra/discussions)
+4. Join our [Slack community](https://deepSightAI-Trinetra-community.slack.com)
 
 We're happy to help! 😊
