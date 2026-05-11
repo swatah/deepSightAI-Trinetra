@@ -162,3 +162,33 @@ async def get_system_status():
             return response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not fetch system status: {e}")
+
+# --- ADMIN REPLAY ENDPOINT (T2.2.9) ---
+@app.post("/admin/replay/{video_id}")
+async def replay_video(video_id: str, current_user=Depends(require_auth) if AUTH_AVAILABLE else None):
+    """
+    Replay all historical FrameReadyEvents for a given video.
+    
+    This endpoint triggers re-processing of a video by republishing all
+    original events to the events:frame_ready stream. The embedder will
+    consume these events and re-generate embeddings.
+    
+    Requires admin authentication.
+    
+    Args:
+        video_id: The video identifier to replay
+        
+    Returns:
+        dict: {"replayed": N, "video_id": video_id}
+    """
+    # Check admin role if auth available
+    if AUTH_AVAILABLE:
+        # Assuming current_user is a dict with 'role' or 'roles' field
+        user_roles = current_user.get("roles", []) if isinstance(current_user, dict) else []
+        if "admin" not in user_roles and current_user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Admin role required")
+    
+    from shared.streaming.replay import ReplayService
+    service = ReplayService()
+    count = service.replay(video_id)
+    return {"replayed": count, "video_id": video_id}
