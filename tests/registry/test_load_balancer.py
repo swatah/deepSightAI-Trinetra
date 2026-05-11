@@ -21,7 +21,7 @@ def test_get_available_extractor_round_robin(mock_r):
     # We'll create a list of keys
     keys = [f"extractor:{ext['extractor_id']}" for ext in extractors]
 
-    # We'll keep a state dictionary for each key
+    # We'll keep a state dictionary for each key (for hash values)
     state = {}
     for key in keys:
         state[key] = {
@@ -30,35 +30,39 @@ def test_get_available_extractor_round_robin(mock_r):
             "status": "available"
         }
 
+    # We'll keep a separate state for index keys
+    index_state = {}
+
     def scan_iter_side_effect(match):
-        return keys
+        # match is like "extractor:*", we return keys that start with the prefix without the *
+        if match == "extractor:*":
+            return keys
+        return []
 
     def hgetall_side_effect(key):
         return state.get(key, {})
+
+    def hget_side_effect(key, field):
+        hash_dict = state.get(key, {})
+        return hash_dict.get(field)
 
     def hset_side_effect(key, field, value):
         if key in state:
             state[key][field] = value
         return True
 
-    def exists_side_effect(key):
-        return key in state
-
     def get_side_effect(key):
         # For the index keys, return None so that we start at 0
-        if key in ["extractor:index", "embedder:index"]:
-            return None
-        # For other keys, we don't expect them in this test, but just in case
-        return None
+        return index_state.get(key)
 
     def set_side_effect(key, value):
-        # We don't need to do anything, just accept the call
+        index_state[key] = value
         return True
 
     mock_r.scan_iter.side_effect = scan_iter_side_effect
     mock_r.hgetall.side_effect = hgetall_side_effect
+    mock_r.hget.side_effect = hget_side_effect
     mock_r.hset.side_effect = hset_side_effect
-    mock_r.exists.side_effect = exists_side_effect
     mock_r.get.side_effect = get_side_effect
     mock_r.set.side_effect = set_side_effect
 
@@ -100,7 +104,7 @@ def test_get_available_embedder_round_robin(mock_r):
     # We'll create a list of keys
     keys = [f"embedder:{emb['embedder_id']}" for emb in embedders]
 
-    # We'll keep a state dictionary for each key
+    # We'll keep a state dictionary for each key (for hash values)
     state = {}
     for key in keys:
         state[key] = {
@@ -109,35 +113,39 @@ def test_get_available_embedder_round_robin(mock_r):
             "status": "available"
         }
 
+    # We'll keep a separate state for index keys
+    index_state = {}
+
     def scan_iter_side_effect(match):
-        return keys
+        # match is like "embedder:*", we return keys that start with the prefix without the *
+        if match == "embedder:*":
+            return keys
+        return []
 
     def hgetall_side_effect(key):
         return state.get(key, {})
+
+    def hget_side_effect(key, field):
+        hash_dict = state.get(key, {})
+        return hash_dict.get(field)
 
     def hset_side_effect(key, field, value):
         if key in state:
             state[key][field] = value
         return True
 
-    def exists_side_effect(key):
-        return key in state
-
     def get_side_effect(key):
         # For the index keys, return None so that we start at 0
-        if key in ["extractor:index", "embedder:index"]:
-            return None
-        # For other keys, we don't expect them in this test, but just in case
-        return None
+        return index_state.get(key)
 
     def set_side_effect(key, value):
-        # We don't need to do anything, just accept the call
+        index_state[key] = value
         return True
 
     mock_r.scan_iter.side_effect = scan_iter_side_effect
     mock_r.hgetall.side_effect = hgetall_side_effect
+    mock_r.hget.side_effect = hget_side_effect
     mock_r.hset.side_effect = hset_side_effect
-    mock_r.exists.side_effect = exists_side_effect
     mock_r.get.side_effect = get_side_effect
     mock_r.set.side_effect = set_side_effect
 
