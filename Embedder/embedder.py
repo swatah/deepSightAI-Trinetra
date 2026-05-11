@@ -21,6 +21,10 @@ from pymilvus import (
     Collection,
 )
 
+# Import streaming components
+from shared.streaming.consumer import StreamConsumer
+from shared.streaming.schema import FrameReadyEvent
+
 #Milvus variables
 MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-standalone")
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
@@ -438,92 +442,8 @@ def encode_images(paths: List[str]) -> torch.Tensor:
     return feats.float()
 
 
-#Main processing loop to read frames from MinIO, encode, and insert into Milvus
-def process_frames():
-    collection = get_milvus_collection()
-    minio_client = get_minio_client()
-
-    # Mark as available when starting
-    update_embedder_status("available")
-
-    while True:
-        try:
-            found_new_work = False
-
-            # Process regular video segments from the frames bucket
-            video_prefixes = list_video_prefixes(minio_client)
-            for video_prefix in video_prefixes:
-                # Get all segments for this video
-                segments = list_segments_for_video(minio_client, video_prefix)
-                
-                for segment_prefix in segments:
-                    # Check if this segment has already been processed
-                    if is_segment_processed(minio_client, segment_prefix):
-                        # Even if marked as processed, check if there are new frames
-                        if check_segment_has_new_frames(minio_client, segment_prefix):
-                            logger.info(f"Found new frames in previously processed segment: {segment_prefix}")
-                            # Remove the old processed marker since there are new frames
-                            remove_processed_marker(minio_client, segment_prefix)
-                        else:
-                            # No new frames, skip this segment
-                            continue
-
-                    found_new_work = True
-                    # Mark as busy when starting work
-                    update_embedder_status("busy")
-                    logger.info(f"Found new segment to process: {segment_prefix}")
-
-                    # Get all frame objects for this segment
-                    frame_objects = list_frame_objects(minio_client, segment_prefix)
-                    if not frame_objects:
-                        logger.info(f"No images in {segment_prefix}. Marking processed.")
-                        mark_segment_processed(minio_client, segment_prefix)
-                        continue
-
-                    # Process the segment
-                    process_segment_frames(minio_client, collection, video_prefix, segment_prefix, frame_objects)
-                    
-                    # Mark as available after completing work
-                    update_embedder_status("available")
-
-            # Process RTSP buckets
-            rtsp_buckets = list_rtsp_buckets(minio_client)
-            for bucket_name in rtsp_buckets:
-                # Check if this RTSP bucket has already been processed
-                if is_rtsp_bucket_processed(minio_client, bucket_name):
-                    continue
-
-                found_new_work = True
-                # Mark as busy when starting work
-                update_embedder_status("busy")
-                logger.info(f"Found new RTSP bucket to process: {bucket_name}")
-
-                # Get all frame objects in this bucket
-                frame_objects = list_rtsp_frame_objects(minio_client, bucket_name)
-                if not frame_objects:
-                    logger.info(f"No images in RTSP bucket {bucket_name}. Marking processed.")
-                    mark_rtsp_bucket_processed(minio_client, bucket_name)
-                    continue
-
-                # Process the RTSP bucket
-                process_rtsp_frames(minio_client, collection, bucket_name, frame_objects)
-                
-                # Mark as available after completing work
-                update_embedder_status("available")
-
-            if not found_new_work:
-                # Ensure we're marked as available when idle
-                update_embedder_status("available")
-                time.sleep(SLEEP_NO_WORK_SECONDS)
-
-        except Exception as e:
-            logger.exception(f"An unexpected error occurred in the main loop: {e}")
-            # Mark as available even after errors
-            update_embedder_status("available")
-            time.sleep(SLEEP_ON_ERROR_SECONDS)
-
-
-def process_segment_frames(minio_client: Minio, collection: Collection, video_prefix: str, segment_prefix: str, frame_objects: List[str]):
+# Worker function: process a segment (video or RTSP)
+def process_segment_frames(minio_client: Minio, collection: Collection, video_id: str, segment_path: str, frame_objects: List[str]):
     """Process frames from a video segment."""
     # Prepare buffers for batched insert
     buf_video_id: List[str] = []
@@ -548,13 +468,13 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
             # Add to buffers
             for frame_obj, vec in zip(frame_batch, feats.cpu().numpy().tolist()):
                 # Check for duplicates before adding to buffer
-                if not frame_exists(collection, video_prefix, frame_obj):
-                    buf_video_id.append(video_prefix)
+                if not frame_exists(collection, video_id, frame_obj):
+                    buf_video_id.append(video_id)
                     buf_frame_path.append(frame_obj)  # Store MinIO object path
                     buf_embedding.append(vec)
                     processed_frames.append(frame_obj)  # Track for deletion
                 else:
-                    logger.debug(f"Skipping duplicate frame: {video_prefix}/{frame_obj}")
+                    logger.debug(f"Skipping duplicate frame: {video_id}/{frame_obj}")
 
             # Clean up temporary files
             cleanup_temp_files(local_paths)
@@ -581,7 +501,7 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
                 torch.cuda.empty_cache()
 
         except Exception as e:
-            logger.error(f"Error processing frame batch in {segment_prefix}: {e}")
+            logger.error(f"Error processing frame batch in {segment_path}: {e}")
             continue
 
     # Insert any remaining vectors
@@ -601,20 +521,20 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
 
     # Always delete successfully processed frames to save space
     if processed_frames:
-        logger.info(f"Deleting {len(processed_frames)} processed frames from {segment_prefix}")
+        logger.info(f"Deleting {len(processed_frames)} processed frames from {segment_path}")
         delete_frame_objects(minio_client, processed_frames)
 
     # Check if segment is now empty after deleting all frames
-    if not check_segment_has_new_frames(minio_client, segment_prefix):
-        logger.info(f"Segment {segment_prefix} is now empty, will allow reprocessing")
+    if not check_segment_has_new_frames(minio_client, segment_path):
+        logger.info(f"Segment {segment_path} is now empty, will allow reprocessing")
         # Don't mark as processed if there are no frames left
         # This allows the same segment name to be reused for new videos
     else:
         # Mark segment as processed only if there are still unprocessed frames
-        mark_segment_processed(minio_client, segment_prefix)
-        logger.info(f"Finished processing and marked segment as done: {segment_prefix}")
+        mark_segment_processed(minio_client, segment_path)
+        logger.info(f"Finished processing and marked segment as done: {segment_path}")
         
-    logger.info(f"Completed processing segment: {segment_prefix}")
+    logger.info(f"Completed processing segment: {segment_path}")
 
 
 def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name: str, frame_objects: List[str]):
@@ -722,6 +642,7 @@ def register_with_registry():
     except Exception as e:
         logger.error(f"Failed to register with registry: {e}")
 
+
 def update_embedder_status(status: str):
     """Update this embedder's status in the registry."""
     try:
@@ -735,9 +656,88 @@ def update_embedder_status(status: str):
         logger.warning(f"Failed to update embedder status to {status}: {e}")
 
 
+# ==================== EVENT-DRIVEN MAIN LOOP (T2.2.8) ====================
+
+def process_events():
+    """
+    Main event loop: consume FrameReadyEvent messages from Redis Stream.
+    Replaces the old polling-based process_frames() loop.
+    """
+    # Initialize connections
+    collection = get_milvus_collection()
+    minio_client = get_minio_client()
+    
+    # Create Redis Stream consumer
+    consumer = StreamConsumer(
+        group_name="embedder-group",
+        consumer_id=EMBEDDER_ID,
+        redis_client=None  # will create via create_redis_client()
+    )
+    
+    # Mark as available when starting
+    update_embedder_status("available")
+    
+    logger.info("Embedder event consumer started, waiting for FrameReadyEvent messages...")
+    
+    while True:
+        try:
+            # Read events from Redis Stream (block up to 5s)
+            messages = consumer.read(
+                stream_name="events:frame_ready",
+                count=10,
+                block_ms=5000
+            )
+            
+            if not messages:
+                # No messages, continue polling
+                continue
+            
+            for msg in messages:
+                try:
+                    # Parse event
+                    event = FrameReadyEvent.model_validate_json(msg.data["event"])
+                    logger.info(f"Processing event: {event.video_id} / {event.segment_path}")
+                    
+                    # Determine event type and dispatch
+                    if event.event_type == "frame_ready":
+                        # Event contains segment_path (for file-based) or rtsp_bucket
+                        if event.segment_path:
+                            # File-based video segment
+                            # List frames for this segment
+                            frame_objects = list_frame_objects(minio_client, event.segment_path)
+                            if frame_objects:
+                                process_segment_frames(
+                                    minio_client, collection,
+                                    event.video_id, event.segment_path, frame_objects
+                                )
+                        elif event.rtsp_bucket:
+                            # RTSP stream
+                            frame_objects = list_rtsp_frame_objects(minio_client, event.rtsp_bucket)
+                            if frame_objects:
+                                process_rtsp_frames(
+                                    minio_client, collection,
+                                    event.rtsp_bucket, frame_objects
+                                )
+                    
+                    # Acknowledge message after successful processing
+                    consumer.ack("events:frame_ready", msg.id)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to process event {msg.id}: {e}")
+                    # Do NOT ack – message will be redelivered
+                    # Continue with next message
+                    continue
+        
+        except Exception as e:
+            logger.exception(f"Consumer error: {e}")
+            update_embedder_status("error")
+            time.sleep(5)  # backoff before reconnecting
+            # Recreate consumer on error? For now continue
+
+
 if __name__ == "__main__":
     # Register with registry on startup
     register_with_registry()
     
-    # Start processing frames
-    process_frames()
+    # Start event-driven processing
+    process_events()
