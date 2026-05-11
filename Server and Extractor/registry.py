@@ -66,34 +66,90 @@ def update_embedder_status(embedder_id: str, status: str):
 
 @app.get("/get_available_extractor")
 def get_available_extractor():
-    """Finds an available extractor, marks it as busy, and returns its info."""
-    # Scan through all extractor keys
+    """Finds an available extractor using round-robin, marks it as busy, and returns its info."""
+    # Get all extractor keys
+    extractor_keys = []
     for key in r.scan_iter("extractor:*"):
-        extractor_info = r.hgetall(key)
-        if extractor_info.get("status") == "available":
-            # Atomically mark as busy and return
-            r.hset(key, "status", "busy")
+        extractor_keys.append(key)
+    
+    if not extractor_keys:
+        raise HTTPException(status_code=503, detail="No available extractors")
+    
+    # Extract IDs and sort them for consistent order
+    extractor_ids = sorted([key.split(":", 1)[1] for key in extractor_keys])
+    
+    # Get current index for extractors, default to 0
+    index_key = "extractor:index"
+    current_index = r.get(index_key)
+    if current_index is None:
+        current_index = 0
+    else:
+        current_index = int(current_index)
+    
+    # Try to find an available extractor starting from current_index
+    num_extractors = len(extractor_ids)
+    for offset in range(num_extractors):
+        idx = (current_index + offset) % num_extractors
+        extractor_id = extractor_ids[idx]
+        extractor_key = f"extractor:{extractor_id}"
+        status = r.hget(extractor_key, "status")
+        if status == "available":
+            # Mark as busy
+            r.hset(extractor_key, "status", "busy")
+            # Update index to next position
+            r.set(index_key, (idx + 1) % num_extractors)
+            # Return the extractor info
+            extractor_info = r.hgetall(extractor_key)
             return {
                 "extractor_id": extractor_info["extractor_id"],
                 "extractor_url": extractor_info["extractor_url"]
             }
     
+    # If we get here, no extractor was available
     raise HTTPException(status_code=503, detail="No available extractors")
 
 @app.get("/get_available_embedder")
 def get_available_embedder():
-    """Finds an available embedder, marks it as busy, and returns its info."""
-    # Scan through all embedder keys
+    """Finds an available embedder using round-robin, marks it as busy, and returns its info."""
+    # Get all embedder keys
+    embedder_keys = []
     for key in r.scan_iter("embedder:*"):
-        embedder_info = r.hgetall(key)
-        if embedder_info.get("status") == "available":
-            # Atomically mark as busy and return
-            r.hset(key, "status", "busy")
+        embedder_keys.append(key)
+    
+    if not embedder_keys:
+        raise HTTPException(status_code=503, detail="No available embedders")
+    
+    # Extract IDs and sort them for consistent order
+    embedder_ids = sorted([key.split(":", 1)[1] for key in embedder_keys])
+    
+    # Get current index for embedders, default to 0
+    index_key = "embedder:index"
+    current_index = r.get(index_key)
+    if current_index is None:
+        current_index = 0
+    else:
+        current_index = int(current_index)
+    
+    # Try to find an available embedder starting from current_index
+    num_embedders = len(embedder_ids)
+    for offset in range(num_embedders):
+        idx = (current_index + offset) % num_embedders
+        embedder_id = embedder_ids[idx]
+        embedder_key = f"embedder:{embedder_id}"
+        status = r.hget(embedder_key, "status")
+        if status == "available":
+            # Mark as busy
+            r.hset(embedder_key, "status", "busy")
+            # Update index to next position
+            r.set(index_key, (idx + 1) % num_embedders)
+            # Return the embedder info
+            embedder_info = r.hgetall(embedder_key)
             return {
                 "embedder_id": embedder_info["embedder_id"],
                 "embedder_url": embedder_info["embedder_url"]
             }
     
+    # If we get here, no embedder was available
     raise HTTPException(status_code=503, detail="No available embedders")
 
 @app.get("/get_all_services")
