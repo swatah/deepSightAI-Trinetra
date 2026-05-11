@@ -6,6 +6,7 @@ from unittest.mock import patch, MagicMock
 from shared.streaming.replay import ReplayService
 from shared.streaming.schema import FrameReadyEvent
 from shared.streaming.producer import StreamProducer
+from datetime import datetime
 
 
 def test_replay_service_reprocesses_events():
@@ -14,12 +15,16 @@ def test_replay_service_reprocesses_events():
          patch('shared.streaming.replay.StreamProducer') as mock_producer_cls:
         # Setup
         fake_event1 = FrameReadyEvent(
-            event_type="frame_ready", video_id="vid123",
-            segment_path="vid123/seg1", frame_count=10, timestamp="2025-04-03T10:00:00Z"
+            event_type="frame.ready", video_id="vid123",
+            segment_id=0, frame_paths=["vid123/seg1/frame1.jpg"],
+            timestamps=[0.0], sequence_numbers=[0], extractor_id="extractor-1",
+            bucket_name="frames", timestamp=datetime(2025, 4, 3, 10, 0, 0)
         )
         fake_event2 = FrameReadyEvent(
-            event_type="frame_ready", video_id="vid123",
-            segment_path="vid123/seg2", frame_count=5, timestamp="2025-04-03T10:01:00Z"
+            event_type="frame.ready", video_id="vid123",
+            segment_id=1, frame_paths=["vid123/seg2/frame1.jpg"],
+            timestamps=[30.0], sequence_numbers=[1], extractor_id="extractor-1",
+            bucket_name="frames", timestamp=datetime(2025, 4, 3, 10, 1, 0)
         )
         # Redis XRANGE returns (msg_id, {data})
         mock_redis.return_value.xrange.return_value = [
@@ -45,12 +50,16 @@ def test_replay_service_filters_other_videos():
     with patch('shared.streaming.replay.create_redis_client') as mock_redis, \
          patch('shared.streaming.replay.StreamProducer') as mock_producer_cls:
         fake_event1 = FrameReadyEvent(
-            event_type="frame_ready", video_id="vid123",
-            segment_path="vid123/seg1", frame_count=10, timestamp="2025-04-03T10:00:00Z"
+            event_type="frame.ready", video_id="vid123",
+            segment_id=0, frame_paths=["vid123/seg1/frame1.jpg"],
+            timestamps=[0.0], sequence_numbers=[0], extractor_id="extractor-1",
+            bucket_name="frames", timestamp=datetime(2025, 4, 3, 10, 0, 0)
         )
         fake_event2 = FrameReadyEvent(
-            event_type="frame_ready", video_id="vid456",
-            segment_path="vid456/seg1", frame_count=5, timestamp="2025-04-03T10:01:00Z"
+            event_type="frame.ready", video_id="vid456",
+            segment_id=0, frame_paths=["vid456/seg1/frame1.jpg"],
+            timestamps=[0.0], sequence_numbers=[0], extractor_id="extractor-1",
+            bucket_name="frames", timestamp=datetime(2025, 4, 3, 10, 1, 0)
         )
         mock_redis.return_value.xrange.return_value = [
             ("msg-1", {"event": fake_event1.model_dump_json()}),
@@ -75,8 +84,10 @@ def test_replay_service_handles_invalid_events():
          patch('shared.streaming.replay.StreamProducer') as mock_producer_cls:
         # One valid, one invalid (corrupted JSON)
         valid_event = FrameReadyEvent(
-            event_type="frame_ready", video_id="vid123",
-            segment_path="vid123/seg1", frame_count=10, timestamp="2025-04-03T10:00:00Z"
+            event_type="frame.ready", video_id="vid123",
+            segment_id=0, frame_paths=["vid123/seg1/frame1.jpg"],
+            timestamps=[0.0], sequence_numbers=[0], extractor_id="extractor-1",
+            bucket_name="frames", timestamp=datetime(2025, 4, 3, 10, 0, 0)
         )
         mock_redis.return_value.xrange.return_value = [
             ("msg-1", {"event": valid_event.model_dump_json()}),
