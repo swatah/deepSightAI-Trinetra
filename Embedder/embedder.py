@@ -29,6 +29,21 @@ MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 COLLECTION_NAME = os.getenv("MILVUS_COLLECTION", "video_frames")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "512"))  # ViT-B-32 embedding size
 
+def frame_exists(collection: Collection, video_id: str, frame_path: str) -> bool:
+    """Check if a frame already exists in Milvus."""
+    try:
+        # Query for existing entity with matching video_id and frame_path
+        results = collection.query(
+            expr=f'video_id == "{video_id}" && frame_path == "{frame_path}"',
+            output_fields=["pk"],
+            limit=1
+        )
+        return len(results) > 0
+    except Exception as e:
+        logger.warning(f"Error checking for existing frame: {e}")
+        # If we can't check, assume it doesn't exist to avoid blocking inserts
+        return False
+
 #MinIO variables
 MINIO_URL = os.getenv("MINIO_URL", "localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
@@ -372,6 +387,7 @@ def delete_rtsp_frame_objects(minio_client: Minio, bucket_name: str, frame_objec
             logger.error(f"Error deleting RTSP frame {bucket_name}/{frame_object}: {e}")
     logger.info(f"Successfully deleted {deleted_count}/{len(frame_objects)} frames from {bucket_name}")
 
+
 @torch.no_grad()
 #Normalize and encode images using OpenCLIP
 @torch.no_grad()
@@ -418,8 +434,8 @@ def encode_images(paths: List[str]) -> torch.Tensor:
         else:
             feats = model.encode_image(batch)
 
-        feats = feats / feats.norm(dim=-1, keepdim=True)
-        return feats.float()
+    feats = feats / feats.norm(dim=-1, keepdim=True)
+    return feats.float()
 
 
 #Main processing loop to read frames from MinIO, encode, and insert into Milvus
@@ -531,10 +547,14 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_pr
 
             # Add to buffers
             for frame_obj, vec in zip(frame_batch, feats.cpu().numpy().tolist()):
-                buf_video_id.append(video_prefix)
-                buf_frame_path.append(frame_obj)  # Store MinIO object path
-                buf_embedding.append(vec)
-                processed_frames.append(frame_obj)  # Track for deletion
+                # Check for duplicates before adding to buffer
+                if not frame_exists(collection, video_prefix, frame_obj):
+                    buf_video_id.append(video_prefix)
+                    buf_frame_path.append(frame_obj)  # Store MinIO object path
+                    buf_embedding.append(vec)
+                    processed_frames.append(frame_obj)  # Track for deletion
+                else:
+                    logger.debug(f"Skipping duplicate frame: {video_prefix}/{frame_obj}")
 
             # Clean up temporary files
             cleanup_temp_files(local_paths)
@@ -624,10 +644,14 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
 
             # Add to buffers
             for frame_obj, vec in zip(frame_batch, feats.cpu().numpy().tolist()):
-                buf_video_id.append(video_id)
-                buf_frame_path.append(f"{bucket_name}/{frame_obj}")  # Store full bucket/object path
-                buf_embedding.append(vec)
-                processed_frames.append(frame_obj)  # Track for deletion
+                # Check for duplicates before adding to buffer
+                if not frame_exists(collection, video_id, f"{bucket_name}/{frame_obj}"):
+                    buf_video_id.append(video_id)
+                    buf_frame_path.append(f"{bucket_name}/{frame_obj}")  # Store full bucket/object path
+                    buf_embedding.append(vec)
+                    processed_frames.append(frame_obj)  # Track for deletion
+                else:
+                    logger.debug(f"Skipping duplicate frame: {bucket_name}/{frame_obj}")
 
             # Clean up temporary files
             cleanup_temp_files(local_paths)
