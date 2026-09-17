@@ -4,10 +4,10 @@ services:
   # Test runner container
   test-runner:
     build:
-      context: .
+      context: ..
       dockerfile: tests/Dockerfile.test
     volumes:
-      - ./:/workspace
+      - ..:/workspace
       - test-results:/test-results
       # Mount Docker socket for k3d to create clusters using host Docker
       - /var/run/docker.sock:/var/run/docker.sock
