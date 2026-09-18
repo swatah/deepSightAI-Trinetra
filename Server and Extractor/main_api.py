@@ -4,13 +4,13 @@ import ffmpeg
 import asyncio
 import os
 import tempfile
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from pydantic import BaseModel
 from minio import Minio
 from datetime import datetime
 
 # --- CONFIGURATION ---
-REGISTRY_URL = "http://registry:8000"
+REGISTRY_URL = os.getenv("REGISTRY_URL", "http://registry:8000")
 SEGMENT_DURATION_SECONDS = 30
 MINIO_URL = os.getenv("MINIO_URL", "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
@@ -96,22 +96,72 @@ async def process_video(request: VideoSourceRequest):
         return {"message": f"Successfully dispatched {len(tasks)} segments for processing."}
 
 @app.post("/process_rtsp_stream")
-async def process_rtsp_stream(request: RtspSourceRequest):
-    async with httpx.AsyncClient() as client:
+async def process_rtsp_stream(request: RtspSourceRequest, http_request: Request):
+    # RTSP capacity is per-extractor and numeric (soft/hard limit, current
+    # used count), not the binary busy/available claim used for file jobs --
+    # one extractor can watch several camera feeds at once. So instead of
+    # /get_available_extractor's atomic claim, poll every registered
+    # extractor's own /rtsp_status and pick one with room.
+    #
+    # Extractor endpoints require the same auth this request came in with
+    # (they're behind require_auth too), so forward it -- without this every
+    # call below 401s whenever auth is actually enabled, since neither this
+    # nor any other extractor-dispatch call in this file has ever forwarded
+    # the caller's token.
+    forward_headers = {}
+    incoming_auth = http_request.headers.get("Authorization")
+    if incoming_auth:
+        forward_headers["Authorization"] = incoming_auth
+
+    async with httpx.AsyncClient(timeout=10.0, headers=forward_headers) as client:
         try:
-            response = await client.get(f"{REGISTRY_URL}/get_available_extractor")
-            response.raise_for_status()
-            extractor_info = response.json()
-            extractor_url = f"{extractor_info['extractor_url']}/extract_stream"
-            job_payload = {"rtsp_url": request.rtsp_url}
-            dispatch_response = await client.post(extractor_url, json=job_payload)
+            services_response = await client.get(f"{REGISTRY_URL}/get_all_services")
+            services_response.raise_for_status()
+            extractors = services_response.json().get("extractors", [])
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=500, detail=f"Could not reach registry: {e}")
+
+        if not extractors:
+            raise HTTPException(status_code=503, detail="No extractors registered.")
+
+        async def get_status(extractor_info):
+            try:
+                resp = await client.get(f"{extractor_info['extractor_url']}/rtsp_status")
+                resp.raise_for_status()
+                return extractor_info, resp.json()
+            except httpx.HTTPError:
+                return extractor_info, None
+
+        results = await asyncio.gather(*(get_status(e) for e in extractors))
+
+        # Pick the extractor with the most spare RTSP capacity (fewest
+        # current_used relative to its effective limit), skipping any that
+        # didn't respond or are already at capacity.
+        best = None
+        best_spare = -1
+        for extractor_info, status in results:
+            if status is None:
+                continue
+            spare = status["effective_limit"] - status["current_used"]
+            if spare > 0 and spare > best_spare:
+                best = extractor_info
+                best_spare = spare
+
+        if best is None:
+            raise HTTPException(status_code=503, detail="All extractors are at RTSP capacity.")
+
+        try:
+            dispatch_response = await client.post(
+                f"{best['extractor_url']}/extract_stream",
+                json={"rtsp_url": request.rtsp_url}
+            )
             dispatch_response.raise_for_status()
             return {
                 "message": "Stream monitoring job dispatched successfully",
-                "dispatched_to": extractor_info
+                "dispatched_to": best
             }
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=503, detail="All extractors are currently busy.")
+        except httpx.HTTPStatusError:
+            raise HTTPException(status_code=503, detail="Chosen extractor rejected the stream (capacity changed).")
         except httpx.RequestError as e:
             raise HTTPException(status_code=500, detail=f"Could not connect to a service: {e}")
 

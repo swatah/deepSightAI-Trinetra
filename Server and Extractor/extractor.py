@@ -7,8 +7,10 @@ import sys
 import tempfile
 import time
 import traceback
+import uuid
+from collections import deque
 from datetime import datetime
-from fastapi import FastAPI, BackgroundTasks, Depends
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from minio import Minio
 from minio.error import S3Error
@@ -37,13 +39,54 @@ CONTROL_STREAM = "control:ingest"  # For publishing events; will also have frame
 EXTRACTION_FPS = int(os.getenv("EXTRACTION_FPS", get_config("extraction.fps", 5)))
 EXTRACTOR_THREADS = int(os.getenv("EXTRACTOR_THREADS", get_config("extraction.extractor_threads", 4)))
 
-# --- Graceful Shutdown Event ---
-# This event will be set by the main thread's signal handler
+# RTSP concurrency: how many live camera feeds this process accepts.
+# Hard-capped at 6 regardless of what the config file or env var says.
+RTSP_SOFT_LIMIT = int(os.getenv("RTSP_SOFT_LIMIT", get_config("extraction.rtsp_soft_limit", 3)))
+RTSP_HARD_LIMIT = min(6, int(os.getenv("RTSP_HARD_LIMIT", get_config("extraction.rtsp_hard_limit", 6))))
+
+# --- Graceful Shutdown Event (file jobs use this one implicitly via signal handling) ---
 shutdown_event = threading.Event()
 
-# Bounds how many extraction jobs (file segments or RTSP streams) this
-# process runs at once, sized from EXTRACTOR_THREADS.
+# Bounds how many FILE extraction jobs this process runs at once, sized from
+# EXTRACTOR_THREADS. RTSP streams are NOT gated by this -- they're a separate,
+# long-running, lightweight I/O workload with their own soft/hard limit below,
+# since a single process can watch several camera feeds concurrently without
+# needing a dedicated worker slot per feed the way a file segment job does.
 _job_slots = threading.Semaphore(EXTRACTOR_THREADS)
+
+# --- RTSP capacity tracking ---
+# stream_id -> threading.Event(), one per active RTSP stream so each can be
+# stopped independently (a single shared event would stop every stream at once).
+_active_rtsp_streams = {}
+# RLock, not Lock: /extract_stream holds this while calling _rtsp_effective_limit(),
+# which itself acquires it via _rtsp_is_degraded() -- a plain Lock would deadlock
+# on that reentrant acquisition from the same thread.
+_rtsp_lock = threading.RLock()
+
+# Rolling window of recent per-frame grab+upload latencies (seconds), used to
+# detect degradation. If the extractor is struggling to keep up, average
+# latency rises well above what a healthy feed looks like.
+_rtsp_frame_latencies = deque(maxlen=20)
+_RTSP_DEGRADED_LATENCY_SECONDS = 0.5
+
+
+def _rtsp_record_latency(seconds: float):
+    with _rtsp_lock:
+        _rtsp_frame_latencies.append(seconds)
+
+
+def _rtsp_is_degraded() -> bool:
+    with _rtsp_lock:
+        if not _rtsp_frame_latencies:
+            return False
+        avg = sum(_rtsp_frame_latencies) / len(_rtsp_frame_latencies)
+    return avg > _RTSP_DEGRADED_LATENCY_SECONDS
+
+
+def _rtsp_effective_limit() -> int:
+    """The ceiling currently in effect: throttled down to the soft limit
+    while degraded, otherwise the hard limit."""
+    return RTSP_SOFT_LIMIT if _rtsp_is_degraded() else RTSP_HARD_LIMIT
 
 def ensure_bucket(minio_client, bucket_name):
     """Helper function to create a Minio bucket if it doesn't already exist."""
@@ -131,11 +174,12 @@ class GStreamerRtspExtractor:
     Connects to an RTSP stream, captures frames, and uploads them to Minio.
     It checks a threading.Event to know when to shut down gracefully.
     """
-    def __init__(self, rtsp_url: str, video_id: str, minio_client, bucket_name: str):
+    def __init__(self, rtsp_url: str, video_id: str, minio_client, bucket_name: str, shutdown_event: threading.Event):
         self.rtsp_url = rtsp_url
         self.video_id = video_id
         self.minio_client = minio_client
         self.bucket_name = bucket_name
+        self.shutdown_event = shutdown_event  # per-stream, not shared with other concurrent streams
         self.loop = GLib.MainLoop()
         self.pipeline = None
         self.sequence_counter = 0  # Track sequence numbers within this session
@@ -147,12 +191,19 @@ class GStreamerRtspExtractor:
             err, debug = message.parse_error()
             print(f"[{EXTRACTOR_ID}] GStreamer error (RTSP): {err} {debug}")
             self.stop()
+            # start()'s wait loop only exits when shutdown_event is set -- without
+            # this, a pipeline that dies on its own (bad URL, dropped connection)
+            # never returns from start(), so the background job never finishes and
+            # this stream's capacity slot leaks forever.
+            self.shutdown_event.set()
         elif msg_type == Gst.MessageType.EOS:
             print(f"[{EXTRACTOR_ID}] End-of-stream reached for RTSP.")
             self.stop()
+            self.shutdown_event.set()
 
     def on_new_sample(self, sink):
         """Callback triggered when a new frame is available from the appsink."""
+        frame_start = time.monotonic()
         sample = sink.emit("pull-sample")
         if sample:
             buffer = sample.get_buffer()
@@ -165,6 +216,7 @@ class GStreamerRtspExtractor:
                         frame_name = f"frame_{int(time.time() * 1000)}.jpg"
                         self.minio_client.fput_object(self.bucket_name, frame_name, tmpfile.name)
                         print(f"[{EXTRACTOR_ID}] Uploaded {frame_name} to bucket {self.bucket_name}")
+                        _rtsp_record_latency(time.monotonic() - frame_start)
 
                         # Publish FrameReadyEvent
                         try:
@@ -209,9 +261,9 @@ class GStreamerRtspExtractor:
             bus.connect("message", self.on_message)
             print(f"[{EXTRACTOR_ID}] Starting RTSP pipeline...")
             self.pipeline.set_state(Gst.State.PLAYING)
-            # Use a context to periodically check the shutdown event
+            # Use a context to periodically check this stream's own shutdown event
             context = self.loop.get_context()
-            while not shutdown_event.is_set():
+            while not self.shutdown_event.is_set():
                 context.iteration(may_block=True)
             print(f"[{EXTRACTOR_ID}] Shutdown signal received, stopping RTSP stream...")
             self.stop()
@@ -303,13 +355,12 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
                 client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=available")
             _job_slots.release()
 
-def run_rtsp_extraction_job(rtsp_url: str):
-    """Background task to process a live RTSP stream."""
-    _job_slots.acquire()
-    shutdown_event.clear() # Ensure the event is not set from a previous run
-    with httpx.Client() as client:
-        client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=busy")
-
+def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threading.Event):
+    """Background task to process a live RTSP stream. Runs alongside other
+    concurrent RTSP streams in this same process, up to the soft/hard limit --
+    see _active_rtsp_streams. Not gated by _job_slots (that's for file jobs)
+    and doesn't flip the registry's file-job busy/available status, since RTSP
+    capacity is tracked separately via _rtsp_effective_limit()/GET /rtsp_status."""
     clean_minio_url = MINIO_URL.replace("http://", "").replace("https://", "")
     minio_client = Minio(clean_minio_url, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=False)
     rtsp_bucket = f"frames-rtsp-{EXTRACTOR_ID}-{int(time.time())}"
@@ -317,15 +368,14 @@ def run_rtsp_extraction_job(rtsp_url: str):
     # Generate a video_id for this RTSP stream session (use bucket name or a UUID)
     video_id = rtsp_bucket  # Use bucket as video_id
 
-    extractor = GStreamerRtspExtractor(rtsp_url, video_id, minio_client, rtsp_bucket)
+    extractor = GStreamerRtspExtractor(rtsp_url, video_id, minio_client, rtsp_bucket, stream_event)
     try:
         extractor.start()
     except Exception as e:
         print(f"[{EXTRACTOR_ID}] Error during RTSP extraction job: {e}")
     finally:
-        with httpx.Client() as client:
-            client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=available")
-        _job_slots.release()
+        with _rtsp_lock:
+            _active_rtsp_streams.pop(stream_id, None)
         print(f"[{EXTRACTOR_ID}] RTSP job for {rtsp_url} has concluded.")
 
 # --- FASTAPI APPLICATION SETUP ---
@@ -357,15 +407,42 @@ def extract(request: FileJobRequest, background_tasks: BackgroundTasks):
 
 @app.post("/extract_stream")
 def extract_stream(request: RtspJobRequest, background_tasks: BackgroundTasks):
-    """Endpoint to start a job for an RTSP stream."""
-    background_tasks.add_task(run_rtsp_extraction_job, request.rtsp_url)
-    return {"message": "Job for RTSP stream started."}
+    """Endpoint to start a job for an RTSP stream. Rejected with 503 if this
+    extractor is already at its effective RTSP capacity (soft limit if
+    degraded, hard limit otherwise)."""
+    with _rtsp_lock:
+        if len(_active_rtsp_streams) >= _rtsp_effective_limit():
+            raise HTTPException(status_code=503, detail="Extractor at RTSP stream capacity")
+        stream_id = f"{EXTRACTOR_ID}-rtsp-{uuid.uuid4().hex[:8]}"
+        stream_event = threading.Event()
+        _active_rtsp_streams[stream_id] = stream_event
+
+    background_tasks.add_task(run_rtsp_extraction_job, request.rtsp_url, stream_id, stream_event)
+    return {"message": "Job for RTSP stream started.", "stream_id": stream_id}
+
+@app.get("/rtsp_status")
+def rtsp_status():
+    """Current RTSP capacity: how many streams are active vs. the configured
+    limits, and whether auto-throttling has kicked in."""
+    degraded = _rtsp_is_degraded()
+    with _rtsp_lock:
+        current_used = len(_active_rtsp_streams)
+    return {
+        "current_used": current_used,
+        "soft_limit": RTSP_SOFT_LIMIT,
+        "hard_limit": RTSP_HARD_LIMIT,
+        "effective_limit": RTSP_SOFT_LIMIT if degraded else RTSP_HARD_LIMIT,
+        "degraded": degraded,
+    }
 
 # --- MAIN THREAD SIGNAL HANDLING ---
 def handle_signal(signum, frame):
-    """Signal handler that sets the global shutdown event."""
-    print(f"Main thread received signal {signum}, setting shutdown event.")
+    """Signal handler that stops every active RTSP stream in this process."""
+    print(f"Main thread received signal {signum}, stopping all active RTSP streams.")
     shutdown_event.set()
+    with _rtsp_lock:
+        for stream_event in _active_rtsp_streams.values():
+            stream_event.set()
 
 # Register signal handlers in the main thread
 signal.signal(signal.SIGINT, handle_signal)

@@ -19,11 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY "Server and Extractor/requirements.txt" ./
+COPY ["Server and Extractor/requirements.txt", "./"]
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY "Server and Extractor/" ./
+COPY ["Server and Extractor/", "./"]
 COPY shared/ ./shared/
 COPY config/ ./config/
 
