@@ -3,6 +3,7 @@ import time
 import logging
 import tempfile
 import httpx
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 import numpy as np
 
@@ -24,6 +25,7 @@ from pymilvus import (
 # Import streaming components
 from shared.streaming.consumer import StreamConsumer
 from shared.streaming.schema import FrameReadyEvent
+from shared.config import get as get_config
 
 #Milvus variables
 MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-standalone")
@@ -62,10 +64,11 @@ EMBEDDER_URL = os.getenv("EMBEDDER_URL", "http://embedder-1:8000")
 #Processing markers
 PROCESSED_MARKER = ".processed"
 
-FILES_PER_EMBED_BATCH = int(os.getenv("FILES_PER_EMBED_BATCH", "64"))  
-INSERT_BATCH_SIZE = int(os.getenv("INSERT_BATCH_SIZE", "1000"))        
+FILES_PER_EMBED_BATCH = int(os.getenv("FILES_PER_EMBED_BATCH", "64"))
+INSERT_BATCH_SIZE = int(os.getenv("INSERT_BATCH_SIZE", "1000"))
 SLEEP_NO_WORK_SECONDS = int(os.getenv("SLEEP_NO_WORK_SECONDS", "10"))
 SLEEP_ON_ERROR_SECONDS = int(os.getenv("SLEEP_ON_ERROR_SECONDS", "30"))
+EMBEDDER_THREADS = int(os.getenv("EMBEDDER_THREADS", get_config("extraction.embedder_threads", 4)))
 
 # ONNX Configuration
 USE_ONNX = os.getenv("USE_ONNX", "1") == "1"
@@ -230,21 +233,23 @@ def mark_rtsp_bucket_processed(minio_client: Minio, bucket_name: str):
         logger.error(f"Error marking RTSP bucket {bucket_name} as processed: {e}")
 
 
+def _download_one(minio_client: Minio, bucket_name: str, frame_object: str):
+    """Download a single frame object to a temp file; returns the local path or None on failure."""
+    try:
+        tmp_file = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
+        tmp_file.close()
+        minio_client.fget_object(bucket_name, frame_object, tmp_file.name)
+        return tmp_file.name
+    except S3Error as e:
+        logger.error(f"Error downloading frame {frame_object} from {bucket_name}: {e}")
+        return None
+
+
 def download_rtsp_frame_objects(minio_client: Minio, bucket_name: str, frame_objects: List[str]) -> List[str]:
     """Download frame objects from an RTSP bucket to temporary files and return local paths."""
-    local_paths = []
-    for frame_object in frame_objects:
-        try:
-            # Create temporary file
-            tmp_file = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
-            tmp_file.close()
-            
-            # Download from MinIO
-            minio_client.fget_object(bucket_name, frame_object, tmp_file.name)
-            local_paths.append(tmp_file.name)
-        except S3Error as e:
-            logger.error(f"Error downloading RTSP frame {frame_object} from {bucket_name}: {e}")
-    return local_paths
+    with ThreadPoolExecutor(max_workers=EMBEDDER_THREADS) as pool:
+        results = pool.map(lambda obj: _download_one(minio_client, bucket_name, obj), frame_objects)
+    return [path for path in results if path is not None]
 
 
 def list_video_prefixes(minio_client: Minio) -> List[str]:
@@ -342,19 +347,9 @@ def check_segment_has_new_frames(minio_client: Minio, segment_prefix: str) -> bo
 
 def download_frame_objects(minio_client: Minio, frame_objects: List[str]) -> List[str]:
     """Download frame objects from MinIO to temporary files and return local paths."""
-    local_paths = []
-    for frame_object in frame_objects:
-        try:
-            # Create temporary file
-            tmp_file = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
-            tmp_file.close()
-            
-            # Download from MinIO
-            minio_client.fget_object(FRAME_BUCKET, frame_object, tmp_file.name)
-            local_paths.append(tmp_file.name)
-        except S3Error as e:
-            logger.error(f"Error downloading frame {frame_object}: {e}")
-    return local_paths
+    with ThreadPoolExecutor(max_workers=EMBEDDER_THREADS) as pool:
+        results = pool.map(lambda obj: _download_one(minio_client, FRAME_BUCKET, obj), frame_objects)
+    return [path for path in results if path is not None]
 
 
 def cleanup_temp_files(file_paths: List[str]):

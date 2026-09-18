@@ -1,0 +1,32 @@
+# Global configuration shared by every extractor/embedder node.
+#
+# Loaded once per process by shared/config.py. Any single value here can
+# still be overridden per-node with an environment variable (each service
+# does `os.getenv("SOME_VAR", get_config("some.path", default))`) -- this
+# file only sets the shared default so every node starts from the same
+# place instead of duplicating numbers across machines.
+
+extraction:
+  # Frames captured per second, for both file-based and RTSP extraction.
+  fps: 5
+  # Max extraction jobs (file segments or RTSP streams) one extractor
+  # process will run concurrently.
+  extractor_threads: 4
+  # Max concurrent frame downloads one embedder process will run while
+  # pulling a batch from MinIO.
+  embedder_threads: 4
+
+feeds: []
+  # - id: cam1
+  #   url: rtsp://user:pass@camera-host/stream1
+
+auth:
+  # Paths to credential material, not the credentials themselves -- actual
+  # secrets belong in environment variables or a secrets manager, never in
+  # this file.
+  oauth_token_path: /etc/trinetra/secrets/oauth_token.json
+  login_credentials_path: /etc/trinetra/secrets/login.json
+
+subscription:
+  plan: enterprise
+  max_concurrent_streams: 50

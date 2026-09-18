@@ -8,3 +8,4 @@ onnx
 onnxruntime-gpu
 onnxruntime
 httpx
+pyyaml

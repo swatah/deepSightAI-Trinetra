@@ -16,6 +16,7 @@ import signal
 import threading
 from shared.streaming.producer import StreamProducer
 from shared.streaming.schema import FrameReadyEvent
+from shared.config import get as get_config
 
 # --- GStreamer and GObject Imports ---
 gi.require_version('Gst', '1.0')
@@ -33,9 +34,16 @@ VIDEO_BUCKET = "videos"
 FRAME_BUCKET = "frames"  # Used for file jobs
 CONTROL_STREAM = "control:ingest"  # For publishing events; will also have frames:{video_id} later but we use control for now per design? Actually design says frames go to frames:{video_id}. We'll use that.
 
+EXTRACTION_FPS = int(os.getenv("EXTRACTION_FPS", get_config("extraction.fps", 5)))
+EXTRACTOR_THREADS = int(os.getenv("EXTRACTOR_THREADS", get_config("extraction.extractor_threads", 4)))
+
 # --- Graceful Shutdown Event ---
 # This event will be set by the main thread's signal handler
 shutdown_event = threading.Event()
+
+# Bounds how many extraction jobs (file segments or RTSP streams) this
+# process runs at once, sized from EXTRACTOR_THREADS.
+_job_slots = threading.Semaphore(EXTRACTOR_THREADS)
 
 def ensure_bucket(minio_client, bucket_name):
     """Helper function to create a Minio bucket if it doesn't already exist."""
@@ -102,7 +110,7 @@ class GStreamerFileExtractor:
     def extract_frames(self, input_file, output_dir):
         file_uri = f"file://{os.path.abspath(input_file)}"
         pipeline_desc = f"""
-        uridecodebin uri="{file_uri}" ! videoconvert ! videorate ! video/x-raw,framerate=1/1 !
+        uridecodebin uri="{file_uri}" ! videoconvert ! videorate ! video/x-raw,framerate={EXTRACTION_FPS}/1 !
         jpegenc !
         multifilesink location="{output_dir}/frame-%05d.jpg"
         """
@@ -189,7 +197,7 @@ class GStreamerRtspExtractor:
         pipeline_desc = f"""
             rtspsrc location={self.rtsp_url} latency=0 !
             rtph264depay ! h264parse ! avdec_h264 !
-            videoconvert ! videorate ! video/x-raw,framerate=1/5 !
+            videoconvert ! videorate ! video/x-raw,framerate={EXTRACTION_FPS}/1 !
             jpegenc ! appsink name=sink emit-signals=true
         """
         try:
@@ -231,6 +239,7 @@ class RtspJobRequest(BaseModel):
 # --- BACKGROUND JOB FUNCTIONS ---
 def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, duration: float):
     """Background task to process a segment of a video file from Minio."""
+    _job_slots.acquire()
     with httpx.Client() as client:
         client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=busy")
 
@@ -264,10 +273,9 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
                 minio_object_name = f"{video_basename}/segment_{segment_id:04d}/{frame_file}"
                 minio_client.fput_object(FRAME_BUCKET, minio_object_name, local_frame_path)
                 # Collect metadata
-                # Derive timestamp from filename or use start_time + seq_num (since 1 fps)
                 # frame_file format: frame_XXXXX.jpg; GStreamer outputs sequentially
-                # We can approximate timestamp as start_time + seq_num seconds (1 frame per second)
-                timestamp = start_time + seq_num  # 1 fps extraction
+                # at EXTRACTION_FPS, so consecutive frames are 1/EXTRACTION_FPS apart.
+                timestamp = start_time + seq_num / EXTRACTION_FPS
                 uploaded_frames.append({
                     "object_name": minio_object_name,
                     "timestamp": timestamp,
@@ -293,9 +301,11 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
         finally:
             with httpx.Client() as client:
                 client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=available")
+            _job_slots.release()
 
 def run_rtsp_extraction_job(rtsp_url: str):
     """Background task to process a live RTSP stream."""
+    _job_slots.acquire()
     shutdown_event.clear() # Ensure the event is not set from a previous run
     with httpx.Client() as client:
         client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=busy")
@@ -315,6 +325,7 @@ def run_rtsp_extraction_job(rtsp_url: str):
     finally:
         with httpx.Client() as client:
             client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=available")
+        _job_slots.release()
         print(f"[{EXTRACTOR_ID}] RTSP job for {rtsp_url} has concluded.")
 
 # --- FASTAPI APPLICATION SETUP ---

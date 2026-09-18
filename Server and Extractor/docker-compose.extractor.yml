@@ -21,7 +21,9 @@ services:
     networks: [ video-net ]
 
   registry:
-    build: .
+    build:
+      context: ..
+      dockerfile: "Server and Extractor/Dockerfile"
     command: uvicorn registry:app --host 0.0.0.0 --port 8000
     restart: always
     environment: { REDIS_URL: "redis://redis:6379" }
@@ -30,7 +32,9 @@ services:
     networks: [ video-net ]
 
   input-router:
-    build: .
+    build:
+      context: ..
+      dockerfile: "Server and Extractor/Dockerfile"
     command: uvicorn main_api:app --host 0.0.0.0 --port 8080
     restart: always
     ports: [ "8080:8080" ]
@@ -38,7 +42,9 @@ services:
     networks: [ video-net ]
 
   extractor-1: &extractor-template
-    build: .
+    build:
+      context: ..
+      dockerfile: "Server and Extractor/Dockerfile"
     command: uvicorn extractor:app --host 0.0.0.0 --port 8001
     restart: always
     environment:
@@ -46,10 +52,9 @@ services:
       - MINIO_URL=http://minio:9000
       - EXTRACTOR_ID=extractor-1
       - EXTRACTOR_URL=http://extractor-1:8001
-      - PYTHONPATH=/usr/lib/python3/dist-packages
     depends_on: { registry: { condition: service_healthy }, minio: { condition: service_healthy } }
     networks: [ video-net ]
-  
+
   extractor-2:
     <<: *extractor-template
     command: uvicorn extractor:app --host 0.0.0.0 --port 8002
@@ -58,7 +63,6 @@ services:
       - MINIO_URL=http://minio:9000
       - EXTRACTOR_ID=extractor-2
       - EXTRACTOR_URL=http://extractor-2:8002
-      - PYTHONPATH=/usr/lib/python3/dist-packages
 
   extractor-3:
     <<: *extractor-template
@@ -68,7 +72,6 @@ services:
       - MINIO_URL=http://minio:9000
       - EXTRACTOR_ID=extractor-3
       - EXTRACTOR_URL=http://extractor-3:8003
-      - PYTHONPATH=/usr/lib/python3/dist-packages
 
 networks:
   video-net:

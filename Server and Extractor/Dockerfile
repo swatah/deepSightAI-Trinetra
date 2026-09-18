@@ -19,8 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY "Server and Extractor/requirements.txt" ./
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY "Server and Extractor/" ./
+COPY shared/ ./shared/
+COPY config/ ./config/
+
+ENV PYTHONPATH=/app

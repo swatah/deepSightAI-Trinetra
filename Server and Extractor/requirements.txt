@@ -9,3 +9,6 @@ redis
 # For video segmentation
 ffmpeg-python
 minio
+
+# For reading config/global_config.yaml
+pyyaml
