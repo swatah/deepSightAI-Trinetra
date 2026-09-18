@@ -5,6 +5,7 @@ Provides StreamConsumer for reliable message consumption with acknowledgement.
 """
 
 import uuid
+import redis
 from .redis_client import create_redis_client
 
 
@@ -41,7 +42,7 @@ class StreamConsumer:
         """
         try:
             # Create consumer group with last ID '$' (only new messages)
-            self.client.xgroup_create(stream=stream_name, groupname=self.group_name, id='$', mkstream=True)
+            self.client.xgroup_create(name=stream_name, groupname=self.group_name, id='$', mkstream=True)
         except Exception as e:
             # redis-py raises ResponseError for BUSYGROUP
             # Check both the exception message and class name
@@ -72,13 +73,19 @@ class StreamConsumer:
 
         # But I'll keep: block = block_ms if block_ms is not None else 0. That's what we'll do.
 
-        result = self.client.xreadgroup(
-            groupname=self.group_name,
-            consumername=self.consumer_id,
-            streams={stream_name: '>'},
-            count=count,
-            block=block_ms  # if None? Let's pass block_ms directly; if None, redis-py might treat as no block.
-        )
+        try:
+            result = self.client.xreadgroup(
+                groupname=self.group_name,
+                consumername=self.consumer_id,
+                streams={stream_name: '>'},
+                count=count,
+                block=block_ms  # if None? Let's pass block_ms directly; if None, redis-py might treat as no block.
+            )
+        except redis.exceptions.TimeoutError:
+            # A blocking XREADGROUP hitting the client's own socket read timeout
+            # is indistinguishable from "no new messages this window" -- not a
+            # real connectivity failure. Treat it the same as an empty result.
+            return []
 
         # result format: list of (stream, [(message_id, data), ...])
         messages = []

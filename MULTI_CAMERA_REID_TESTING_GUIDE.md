@@ -56,13 +56,13 @@ All under the 30-second segment threshold the extractor uses, so each video beco
 **Steps that will actually be executed, in order:**
 
 1. Provision a GPU VM on vast.ai (§3).
-2. Copy this repo onto the VM and bring up the stack (§4–5).
-3. Download the 3 test videos with `wget` and upload them into MinIO (§6).
-4. Call `/process_video` for each and poll until frames are embedded (§7).
+2. Copy this repo onto the VM and bring up the stack (§4–5), starting **two extractors and two embedders** instead of one of each, to actually exercise the registry's round-robin selection and the new `EXTRACTOR_THREADS`/`EMBEDDER_THREADS` config.
+3. Download the same 3 test videos with `wget` and upload them into MinIO (§6) — the larger, purpose-built 10-video re-ID test set is deliberately deferred to a later pass; reusing the existing 3 clips is enough to validate multi-instance mechanics.
+4. Call `/process_video` for each, **one request at a time**, and poll until frames are embedded (§7).
 5. Run a battery of `/search/text` queries and record what actually comes back (§7).
 6. Tear down the VM so billing stops (§8).
 
-The UI, RTSP ingestion, and admin/replay endpoints are **not** tested here — out of scope for this pass.
+The UI, RTSP ingestion, and admin/replay endpoints are **not** tested here — out of scope for this pass. **Concurrent/parallel request load testing is also deferred** — this pass is deliberately manual and sequential (one `curl` call at a time). A real concurrency test (many simultaneous requests via a script) is more meaningful once the Docker build is the actual deployment target, since that's how this would really run at scale; testing concurrency against a hand-run native process setup wouldn't tell us much about production behavior.
 
 ---
 
@@ -229,24 +229,29 @@ cd "/root/deepSightAI-Trinetra/Server and Extractor"
 MINIO_URL=localhost:9000 nohup python3 -m uvicorn main_api:app --host 0.0.0.0 --port 8080 > /root/main-api.log 2>&1 &
 ```
 
-### Step 4: Start one extractor (port 8001)
+### Step 4: Start two extractors (ports 8001, 8002)
 
-One is enough for 3 sequential test videos — the registry load-balances across however many are registered.
+Two instances instead of one, specifically to exercise the registry's round-robin selection and the atomic-claim fix under more than one registered extractor. `EXTRACTION_FPS` and `EXTRACTOR_THREADS` come from `config/global_config.yaml` (5fps, 4 concurrent jobs by default) — no need to set them explicitly unless overriding.
 
-`extractor.py` (unlike `main_api.py`, whose only `shared.*` imports are inside function bodies that never execute during this test) does `from shared.streaming.producer import StreamProducer` at module level — same repo-root import issue as the embedder (§9). Needs `PYTHONPATH` pointed at the repo root:
+`extractor.py` (unlike `main_api.py`, whose only `shared.*` imports are inside function bodies that never execute during this test) does `from shared.streaming.producer import StreamProducer` and `from shared.config import get as get_config` at module level — same repo-root import issue as the embedder (§9), now also covering the config loader. Needs `PYTHONPATH` pointed at the repo root so both `shared/` and `config/` resolve:
 
 ```bash
 cd "/root/deepSightAI-Trinetra/Server and Extractor"
+
 EXTRACTOR_ID=extractor-1 EXTRACTOR_URL=http://localhost:8001 REGISTRY_URL=http://localhost:8000 MINIO_URL=localhost:9000 \
 PYTHONPATH=/root/deepSightAI-Trinetra \
-  nohup python3 -m uvicorn extractor:app --host 0.0.0.0 --port 8001 > /root/extractor.log 2>&1 &
+  nohup python3 -m uvicorn extractor:app --host 0.0.0.0 --port 8001 > /root/extractor-1.log 2>&1 &
+
+EXTRACTOR_ID=extractor-2 EXTRACTOR_URL=http://localhost:8002 REGISTRY_URL=http://localhost:8000 MINIO_URL=localhost:9000 \
+PYTHONPATH=/root/deepSightAI-Trinetra \
+  nohup python3 -m uvicorn extractor:app --host 0.0.0.0 --port 8002 > /root/extractor-2.log 2>&1 &
 ```
 
 If you ever need to restart a service, don't use `pkill -f 'uvicorn registry:app'` over SSH — the remote shell's own invoked command line contains that same text, so `pkill -f` matches and kills the SSH session itself before it reaches the real target. Find the PID a different way (e.g. `ps aux | grep uvicorn`, or the port from `ps` output) and `kill` it directly.
 
-### Step 5: Embedder — needs a fix for a real import bug, then starts
+### Step 5: Two embedders — needs a fix for a real import bug, then starts
 
-`embedder.py` imports `from shared.streaming.consumer import StreamConsumer`, but `shared/` lives at the repo root, not inside `Embedder/`. Docker's build context for the embedder service is scoped to `Embedder/` only, so **the embedder container as shipped can't actually import this and would crash on startup in Docker too** — this isn't specific to running natively (see §9). Running from the repo root with `PYTHONPATH` pointed at it works around it without editing any code:
+`embedder.py` imports `from shared.streaming.consumer import StreamConsumer` and, as of this pass, `from shared.config import get as get_config` too. `shared/` lives at the repo root, not inside `Embedder/`. The Docker build context for the embedder service used to be scoped to `Embedder/` only, so the embedder container as shipped couldn't actually import this — that's now fixed at the Dockerfile/compose level (§9), but **not exercised by this guide**, since this pass still runs natively (no Docker on a standard vast.ai instance). Running from the repo root with `PYTHONPATH` pointed at it works around it without editing any code:
 
 ```bash
 cd /root/deepSightAI-Trinetra
@@ -255,15 +260,23 @@ pip install -r Embedder/requirements_embedder.txt
 deactivate
 
 cd /root/deepSightAI-Trinetra/Embedder
+
 PYTHONPATH=/root/deepSightAI-Trinetra \
 MILVUS_HOST=localhost MILVUS_PORT=19530 EMBEDDING_DIM=512 \
 MINIO_URL=localhost:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin FRAME_BUCKET=frames \
 REDIS_URL=redis://localhost:6379 REGISTRY_URL=http://localhost:8000 \
 EMBEDDER_ID=embedder-1 EMBEDDER_URL=http://localhost:8100 USE_ONNX=1 \
-nohup /root/deepSightAI-Trinetra/venv-embedder/bin/python3 embedder.py > /root/embedder.log 2>&1 &
+nohup /root/deepSightAI-Trinetra/venv-embedder/bin/python3 embedder.py > /root/embedder-1.log 2>&1 &
+
+PYTHONPATH=/root/deepSightAI-Trinetra \
+MILVUS_HOST=localhost MILVUS_PORT=19530 EMBEDDING_DIM=512 \
+MINIO_URL=localhost:9000 MINIO_ACCESS_KEY=minioadmin MINIO_SECRET_KEY=minioadmin FRAME_BUCKET=frames \
+REDIS_URL=redis://localhost:6379 REGISTRY_URL=http://localhost:8000 \
+EMBEDDER_ID=embedder-2 EMBEDDER_URL=http://localhost:8101 USE_ONNX=1 \
+nohup /root/deepSightAI-Trinetra/venv-embedder/bin/python3 embedder.py > /root/embedder-2.log 2>&1 &
 ```
 
-No local ONNX/PyTorch weights are checked into `Embedder/models/` (it only has plugin-loader code), so this will fall through to downloading OpenCLIP `ViT-B-32` (`laion2b_s34b_b79k`) from the internet on first run — expected, not an error.
+`EMBEDDER_THREADS` (default 4, from `config/global_config.yaml`) bounds how many frames each embedder downloads from MinIO in parallel per batch — no need to set it explicitly unless overriding. No local ONNX/PyTorch weights are checked into `Embedder/models/` (it only has plugin-loader code), so both instances will fall through to downloading OpenCLIP `ViT-B-32` (`laion2b_s34b_b79k`) from the internet on first run — expected, not an error. Only one embedder needs to create the Milvus collection; the second will find it already exists.
 
 ### Step 6: SearchService (port 8081)
 
@@ -324,17 +337,20 @@ EOF
 
 ## 7. API Test Procedure
 
+This pass is deliberately **manual and sequential** — one `curl` call at a time, waited out before sending the next. It's testing that two registered extractors and two registered embedders behave correctly (round-robin claim, atomic status, no double-assignment) with real traffic, not testing throughput under concurrent load — that's a separate, later test once Docker is the real deployment target (see §2).
+
 ### Step 1: Baseline health checks
 
 ```bash
 curl -s http://localhost:9000/minio/health/live && echo " <- minio OK"
 curl -s http://localhost:9091/healthz && echo " <- milvus OK"
 curl -s http://localhost:8081/health; echo
+curl -s http://localhost:8000/get_all_services; echo   # confirm both extractors AND both embedders registered
 ```
 
-The embedder creates the Milvus `video_frames` collection on its own startup (not after the first video, as an earlier draft of this section assumed) — so `/health` should already return `{"status":"healthy",...}` by this point, before any video has been ingested.
+The embedder creates the Milvus `video_frames` collection on its own startup (not after the first video, as an earlier draft of this section assumed) — so `/health` should already return `{"status":"healthy",...}` by this point, before any video has been ingested. `/get_all_services` should list `extractor-1`, `extractor-2`, `embedder-1`, `embedder-2`, all `status: available`.
 
-### Step 2: Ingest the 3 videos
+### Step 2: Ingest the 3 videos, one at a time
 
 ```bash
 curl -X POST http://localhost:8080/process_video -H "Content-Type: application/json" -d '{"video_uri": "cam_01_las_vegas_avenue.mp4"}'
@@ -342,7 +358,7 @@ curl -X POST http://localhost:8080/process_video -H "Content-Type: application/j
 curl -X POST http://localhost:8080/process_video -H "Content-Type: application/json" -d '{"video_uri": "cam_03_times_square.mp4"}'
 ```
 
-Each call returns immediately (`{"message": "Successfully dispatched N segments for processing."}`) — dispatch is async, actual extraction + embedding happens in the background.
+Each call returns immediately (`{"message": "Successfully dispatched N segments for processing."}`) — dispatch is async, actual extraction + embedding happens in the background. After all 3 have finished, check `extractor-1.log` and `extractor-2.log` — with 3 sequential single-segment jobs and round-robin selection, expect the work split across both (not all 3 landing on one instance).
 
 ### Step 3: Poll until embeddings land
 
@@ -400,6 +416,7 @@ Documented here so nobody re-discovers these the hard way.
 ### Fixed in this repo (found and corrected during the live run on 2026-09-18)
 
 - **`registry.py`'s round-robin extractor/embedder selection was fundamentally broken.** `get_available_extractor` used `r.scan_iter("extractor:*")` to find registered extractors, but the round-robin position counter was itself stored under the key `"extractor:index"` — which that same `"extractor:*"` scan also matches. Once any extractor had been selected once (which writes `extractor:index`), the scan would include `"index"` as if it were a real extractor ID. The very next time the round-robin happened to land on that fake entry, `r.hget("extractor:index", "status")` crashed with `WRONGTYPE Operation against a key holding the wrong kind of value` (the key is a plain Redis string, not a hash) — and since the crash happened before the counter could advance, every subsequent call landed on the same broken position and crashed forever. The same bug existed for `get_available_embedder` via `"embedder:index"`. **Fixed** by renaming the counters to `extractor_index` / `embedder_index` (no `:` prefix, so they no longer collide with the discovery scan). Verified against the repo's existing `tests/registry/test_load_balancer.py` (4/4 passing) and live on the VM — ingestion of all 3 test videos succeeded after the fix.
+- **The key rename above fixed the crash, but not a deeper race**: selection was still a separate `HGET status` read followed by a separate `HSET status busy` write, so two concurrent callers could both read "available" before either wrote "busy" and get assigned the same instance. **Fixed** by replacing both selection functions with a single Redis Lua script (`_CLAIM_AVAILABLE_SCRIPT`) that does discovery, round-robin pick, and the busy claim as one uninterruptible Redis operation. `tests/registry/test_load_balancer.py` was rewritten to run against a real Redis instance instead of mocks (a mock can't meaningfully exercise Lua-script atomicity), including a new 50-thread concurrency test confirming exactly N successful claims for N available slots, zero duplicates. This is the fix §7's two-extractor/two-embedder test is exercising for the first time against live traffic.
 - **`SearchService/main.py`'s text search never worked.** It encoded the query text with `preprocess([request.query_text])` — but `preprocess` is OpenCLIP's *image* transform pipeline (resize/crop/normalize for pictures), not a text tokenizer. Every call to `/search/text` failed with `Search failed: Unexpected type <class 'list'>`. **Fixed** by tokenizing with `open_clip.get_tokenizer("ViT-B-32")` instead. Verified live — see §7's recorded results for real, correctly-ranked cross-camera search output after the fix.
 
 ### Environment gotchas (not code bugs — deployment traps worth knowing about)
@@ -416,5 +433,5 @@ Documented here so nobody re-discovers these the hard way.
 - **`UI/ui.py` sends the wrong JSON field to `/search/text`** (`query` instead of `query_text`), so as shipped, the UI's search box will get a 422 from the backend. Not exercised by this guide since it's API-only, but worth fixing separately before anyone runs the UI walkthrough.
 - **SearchService has no `Dockerfile` or `requirements.txt`** — it must be run as a bare process with manually installed dependencies (§5).
 - **No GPU device reservation in either compose file** — `embedder`'s container would run OpenCLIP/ONNX on CPU even on a GPU host, since neither compose file declares `deploy.resources.reservations.devices`. Moot for this guide since we're not using Docker at all (see below), but worth knowing if the compose files are ever used directly.
-- **The embedder's Docker build is broken, independent of anything in this guide.** `Embedder/embedder.py` does `from shared.streaming.consumer import StreamConsumer`, but `shared/` only exists at the repo root — not inside `Embedder/`. `docker-compose.embedder.yaml`'s embedder service builds with `context: .` scoped to the `Embedder/` directory, so `shared/` never makes it into the image. `docker build` itself would succeed (it only copies files), but the container would crash immediately on `python embedder.py` with `ModuleNotFoundError: No module named 'shared'`. Confirmed by inspecting the Dockerfile's COPY list and the compose build context; this guide's native run avoids it with `PYTHONPATH=/root/deepSightAI-Trinetra` (§5, Step 5) since we're not in a container at all, but the Docker path itself needs a real fix (e.g. building from the repo root with a `Embedder/Dockerfile` referencing `context: ..`).
+- **The embedder's (and extractor's) Docker build was broken, independent of anything in this guide — now fixed in the repo, but not verified by this guide.** `Embedder/embedder.py` and `Server and Extractor/extractor.py` both import from `shared/`, which only exists at the repo root — not inside either service's own directory. Both `docker-compose.embedder.yaml` and `docker-compose.extractor.yml` used to build with `context: .` scoped to the service's own directory, so `shared/` (and, since this pass, `config/`) never made it into the image; the container would crash on startup with `ModuleNotFoundError: No module named 'shared'`. **Fixed**: both compose files now build with `context: ..` (repo root) and an explicit `dockerfile:` path, and both Dockerfiles now `COPY shared/` and `COPY config/` alongside each service's own files, plus set `ENV PYTHONPATH=/app`. This is a source-level fix, confirmed only by YAML/Dockerfile syntax validation and local `py_compile` — **not** confirmed by an actual `docker build`, since vast.ai standard instances don't support Docker-in-Docker (this guide runs everything as native OS processes instead, per §3). A real Docker-build verification needs either a Docker-capable host, or resolving the vast.ai VM-instance SSH-key blocker (see below) to get a genuine Docker-capable vast.ai machine.
 - **vast.ai VM instances (`docker.io/vastai/kvm`) require an SSH key already registered on the account before creation, and this account is a Team account, which vast.ai's API refuses to register account-level SSH keys for** ("Team SSH keys are not supported"). That's why this guide provisions a standard instance and uses `vastai attach ssh` after creation instead (§3) — and, as a direct consequence, why the whole stack in §4–5 runs as native OS processes rather than via `docker compose`, since standard vast.ai instances don't support Docker-in-Docker either.

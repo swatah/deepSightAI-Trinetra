@@ -9,3 +9,5 @@ onnxruntime-gpu
 onnxruntime
 httpx
 pyyaml
+redis
+pydantic
