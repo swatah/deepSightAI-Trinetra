@@ -27,6 +27,7 @@ ONNX_MODEL_PATH = os.getenv("ONNX_MODEL_PATH", "models/open_clip_vit_b32.onnx")
 model = None
 preprocess = None
 onnx_session = None
+tokenizer = open_clip.get_tokenizer("ViT-B-32")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Load model (ONNX or PyTorch) for text encoding
@@ -110,8 +111,8 @@ async def search_text(request: SearchRequest):
     try:
         # Encode the query text
         with torch.no_grad():
-            text = preprocess([request.query_text]).unsqueeze(0).to(device)
-            
+            text = tokenizer([request.query_text]).to(device)
+
             if USE_ONNX and onnx_session:
                 # ONNX inference path for text
                 # Note: For text encoding, we need the text model

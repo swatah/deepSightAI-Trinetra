@@ -79,7 +79,10 @@ def get_available_extractor():
     extractor_ids = sorted([key.split(":", 1)[1] for key in extractor_keys])
     
     # Get current index for extractors, default to 0
-    index_key = "extractor:index"
+    # NOTE: this key must NOT start with "extractor:" — get_available_extractor's
+    # scan_iter("extractor:*") below would otherwise pick it up as a fake registered
+    # extractor and crash with WRONGTYPE on the next hget() against it.
+    index_key = "extractor_index"
     current_index = r.get(index_key)
     if current_index is None:
         current_index = 0
@@ -123,7 +126,9 @@ def get_available_embedder():
     embedder_ids = sorted([key.split(":", 1)[1] for key in embedder_keys])
     
     # Get current index for embedders, default to 0
-    index_key = "embedder:index"
+    # NOTE: must NOT start with "embedder:" — see the matching note in
+    # get_available_extractor above; same collision applies to scan_iter("embedder:*").
+    index_key = "embedder_index"
     current_index = r.get(index_key)
     if current_index is None:
         current_index = 0
