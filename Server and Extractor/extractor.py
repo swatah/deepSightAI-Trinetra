@@ -95,8 +95,8 @@ def publish_frame_ready_event(video_id: str, segment_id: int, frame_paths: list,
             bucket_name=bucket_name,
             timestamp=datetime.utcnow()
         )
-        # Publish to central frames stream
-        stream_name = "frames"
+        # Publish to the stream the embedder's consumer group reads from.
+        stream_name = "events:frame_ready"
         producer = get_producer()
         producer.publish(stream_name, event)
         print(f"[{EXTRACTOR_ID}] Published FrameReadyEvent to {stream_name} for video {video_id}, segment {segment_id}")

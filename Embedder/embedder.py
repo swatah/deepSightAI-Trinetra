@@ -691,29 +691,26 @@ def process_events():
                 try:
                     # Parse event
                     event = FrameReadyEvent.model_validate_json(msg.data["event"])
-                    logger.info(f"Processing event: {event.video_id} / {event.segment_path}")
-                    
-                    # Determine event type and dispatch
-                    if event.event_type == "frame_ready":
-                        # Event contains segment_path (for file-based) or rtsp_bucket
-                        if event.segment_path:
-                            # File-based video segment
-                            # List frames for this segment
-                            frame_objects = list_frame_objects(minio_client, event.segment_path)
-                            if frame_objects:
-                                process_segment_frames(
-                                    minio_client, collection,
-                                    event.video_id, event.segment_path, frame_objects
-                                )
-                        elif event.rtsp_bucket:
-                            # RTSP stream
-                            frame_objects = list_rtsp_frame_objects(minio_client, event.rtsp_bucket)
-                            if frame_objects:
-                                process_rtsp_frames(
-                                    minio_client, collection,
-                                    event.rtsp_bucket, frame_objects
-                                )
-                    
+                    logger.info(
+                        f"Processing event: {event.video_id} / segment {event.segment_id} "
+                        f"({len(event.frame_paths)} frames)"
+                    )
+
+                    # The event already carries the exact frame paths uploaded by the
+                    # extractor -- no need to re-list the bucket. RTSP vs file-based is
+                    # distinguished by bucket naming convention (see list_rtsp_buckets).
+                    if event.bucket_name.startswith("frames-rtsp-"):
+                        process_rtsp_frames(
+                            minio_client, collection,
+                            event.bucket_name, event.frame_paths
+                        )
+                    else:
+                        segment_path = f"{event.video_id}/segment_{event.segment_id:04d}"
+                        process_segment_frames(
+                            minio_client, collection,
+                            event.video_id, segment_path, event.frame_paths
+                        )
+
                     # Acknowledge message after successful processing
                     consumer.ack("events:frame_ready", msg.id)
                     
