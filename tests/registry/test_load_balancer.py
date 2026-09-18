@@ -1,178 +1,132 @@
 """
-Test cases for round-robin load balancer in registry.
-"""
-import pytest
-from unittest.mock import MagicMock, patch
-import sys
-import os
+Test cases for the round-robin load balancer in registry.py.
 
-# Add the current directory to the path so we can import registry
+These run against a real Redis instance rather than a mock. The selection
+logic is implemented as a Lua script (see registry.py's _CLAIM_AVAILABLE_SCRIPT)
+so that discovery + status-check + claim happen as one atomic, uninterruptible
+operation on the Redis server -- that's what closes the race where two
+concurrent callers could otherwise both see "available" before either writes
+"busy". Mocking individual hget/hset calls can't exercise that: the Lua
+script is bound to whatever Redis client exists at import time, and there's
+nothing meaningful to assert about atomicity against a mock that isn't
+actually concurrent. A real Redis instance is required to test this for real.
+
+Set REDIS_URL to point at a running Redis (defaults to redis://localhost:6379).
+Tests are skipped if no Redis is reachable.
+"""
+import concurrent.futures
+import os
+import sys
+
+import pytest
+import redis
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'Server and Extractor'))
 
-@patch('registry.r')
-def test_get_available_extractor_round_robin(mock_r):
-    # Setup: create three extractors
-    extractors = [
-        {"extractor_id": "ext1", "extractor_url": "http://ext1:8000"},
-        {"extractor_id": "ext2", "extractor_url": "http://ext2:8000"},
-        {"extractor_id": "ext3", "extractor_url": "http://ext3:8000"},
-    ]
+TEST_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
-    # We'll create a list of keys
-    keys = [f"extractor:{ext['extractor_id']}" for ext in extractors]
 
-    # We'll keep a state dictionary for each key (for hash values)
-    state = {}
-    for key in keys:
-        state[key] = {
-            "extractor_id": key.split(':')[1],
-            "extractor_url": "http://"+key.split(':')[1]+":8000",
-            "status": "available"
-        }
-
-    # We'll keep a separate state for index keys
-    index_state = {}
-
-    def scan_iter_side_effect(match):
-        # match is like "extractor:*", we return keys that start with the prefix without the *
-        if match == "extractor:*":
-            return keys
-        return []
-
-    def hgetall_side_effect(key):
-        return state.get(key, {})
-
-    def hget_side_effect(key, field):
-        hash_dict = state.get(key, {})
-        return hash_dict.get(field)
-
-    def hset_side_effect(key, field, value):
-        if key in state:
-            state[key][field] = value
+def _redis_available():
+    try:
+        redis.Redis.from_url(TEST_REDIS_URL, socket_connect_timeout=1).ping()
         return True
+    except redis.exceptions.RedisError:
+        return False
 
-    def get_side_effect(key):
-        # For the index keys, return None so that we start at 0
-        return index_state.get(key)
 
-    def set_side_effect(key, value):
-        index_state[key] = value
-        return True
+pytestmark = pytest.mark.skipif(not _redis_available(), reason=f"No Redis reachable at {TEST_REDIS_URL}")
 
-    mock_r.scan_iter.side_effect = scan_iter_side_effect
-    mock_r.hgetall.side_effect = hgetall_side_effect
-    mock_r.hget.side_effect = hget_side_effect
-    mock_r.hset.side_effect = hset_side_effect
-    mock_r.get.side_effect = get_side_effect
-    mock_r.set.side_effect = set_side_effect
 
-    # Import the function inside the patch so that it uses our mock
-    from registry import get_available_extractor
+@pytest.fixture
+def registry_module():
+    """Import registry bound to the test Redis, with a clean keyspace per test."""
+    os.environ["REDIS_URL"] = TEST_REDIS_URL
+    sys.modules.pop("registry", None)
+    import registry as registry_module
 
-    # We will call the function 6 times (two full rounds) and after each call we set the status of the returned extractor back to available.
-    # We expect the order: ext1, ext2, ext3, ext1, ext2, ext3
+    for key in registry_module.r.keys("extractor*") + registry_module.r.keys("embedder*"):
+        registry_module.r.delete(key)
+
+    yield registry_module
+
+    for key in registry_module.r.keys("extractor*") + registry_module.r.keys("embedder*"):
+        registry_module.r.delete(key)
+
+
+def _register(registry_module, kind, short, n):
+    """kind: 'extractor' or 'embedder'; short: 'ext' or 'emb' (used in instance ids)."""
+    for i in range(1, n + 1):
+        instance_id = f"{short}{i}"
+        registry_module.r.hset(
+            f"{kind}:{instance_id}",
+            mapping={
+                f"{kind}_id": instance_id,
+                f"{kind}_url": f"http://{instance_id}:8000",
+                "status": "available",
+            },
+        )
+
+
+def test_get_available_extractor_round_robin(registry_module):
+    _register(registry_module, "extractor", "ext", 3)
+
+    # Six calls (two full rounds), resetting each claimed extractor back to
+    # "available" afterward -- expect a stable round-robin order.
     results = []
-    for i in range(6):
-        result = get_available_extractor()
+    for _ in range(6):
+        result = registry_module.get_available_extractor()
         results.append(result["extractor_id"])
-        # Reset the status of the extracted extractor to available for the next round
-        key = f"extractor:{result['extractor_id']}"
-        state[key]["status"] = "available"
+        registry_module.r.hset(f"extractor:{result['extractor_id']}", "status", "available")
 
     assert results == ["ext1", "ext2", "ext3", "ext1", "ext2", "ext3"]
 
 
-@patch('registry.r')
-def test_get_available_extractor_no_available(mock_r):
-    # Setup: no extractors
-    mock_r.scan_iter.return_value = []
-    from registry import get_available_extractor
+def test_get_available_extractor_no_available(registry_module):
     with pytest.raises(Exception) as exc_info:
-        get_available_extractor()
+        registry_module.get_available_extractor()
     assert "No available extractors" in str(exc_info.value)
 
 
-@patch('registry.r')
-def test_get_available_embedder_round_robin(mock_r):
-    # Setup: create three embedders
-    embedders = [
-        {"embedder_id": "emb1", "embedder_url": "http://emb1:8000"},
-        {"embedder_id": "emb2", "embedder_url": "http://emb2:8000"},
-        {"embedder_id": "emb3", "embedder_url": "http://emb3:8000"},
-    ]
+def test_get_available_embedder_round_robin(registry_module):
+    _register(registry_module, "embedder", "emb", 3)
 
-    # We'll create a list of keys
-    keys = [f"embedder:{emb['embedder_id']}" for emb in embedders]
-
-    # We'll keep a state dictionary for each key (for hash values)
-    state = {}
-    for key in keys:
-        state[key] = {
-            "embedder_id": key.split(':')[1],
-            "embedder_url": "http://"+key.split(':')[1]+":8000",
-            "status": "available"
-        }
-
-    # We'll keep a separate state for index keys
-    index_state = {}
-
-    def scan_iter_side_effect(match):
-        # match is like "embedder:*", we return keys that start with the prefix without the *
-        if match == "embedder:*":
-            return keys
-        return []
-
-    def hgetall_side_effect(key):
-        return state.get(key, {})
-
-    def hget_side_effect(key, field):
-        hash_dict = state.get(key, {})
-        return hash_dict.get(field)
-
-    def hset_side_effect(key, field, value):
-        if key in state:
-            state[key][field] = value
-        return True
-
-    def get_side_effect(key):
-        # For the index keys, return None so that we start at 0
-        return index_state.get(key)
-
-    def set_side_effect(key, value):
-        index_state[key] = value
-        return True
-
-    mock_r.scan_iter.side_effect = scan_iter_side_effect
-    mock_r.hgetall.side_effect = hgetall_side_effect
-    mock_r.hget.side_effect = hget_side_effect
-    mock_r.hset.side_effect = hset_side_effect
-    mock_r.get.side_effect = get_side_effect
-    mock_r.set.side_effect = set_side_effect
-
-    # Import the function inside the patch so that it uses our mock
-    from registry import get_available_embedder
-
-    # We will call the function 6 times (two full rounds) and after each call we set the status of the returned embedder back to available.
-    # We expect the order: emb1, emb2, emb3, emb1, emb2, emb3
     results = []
-    for i in range(6):
-        result = get_available_embedder()
+    for _ in range(6):
+        result = registry_module.get_available_embedder()
         results.append(result["embedder_id"])
-        # Reset the status of the extracted embedder to available for the next round
-        key = f"embedder:{result['embedder_id']}"
-        state[key]["status"] = "available"
+        registry_module.r.hset(f"embedder:{result['embedder_id']}", "status", "available")
 
     assert results == ["emb1", "emb2", "emb3", "emb1", "emb2", "emb3"]
 
 
-@patch('registry.r')
-def test_get_available_embedder_no_available(mock_r):
-    # Setup: no embedders
-    mock_r.scan_iter.return_value = []
-    from registry import get_available_embedder
+def test_get_available_embedder_no_available(registry_module):
     with pytest.raises(Exception) as exc_info:
-        get_available_embedder()
+        registry_module.get_available_embedder()
     assert "No available embedders" in str(exc_info.value)
+
+
+def test_concurrent_claims_never_double_assign(registry_module):
+    """
+    Regression test for the round-robin race: fire many concurrent claims at a
+    small number of available extractors and confirm each one is claimed by
+    exactly one caller, with no duplicate assignment and no crash. This is the
+    property a mock-based test can't verify -- it requires real concurrent
+    requests against real shared state.
+    """
+    _register(registry_module, "extractor", "ext", 3)
+
+    def claim():
+        try:
+            return registry_module.get_available_extractor()
+        except Exception:
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as ex:
+        results = list(ex.map(lambda _: claim(), range(50)))
+
+    claimed_ids = [r["extractor_id"] for r in results if r]
+    assert len(claimed_ids) == 3, f"expected exactly 3 successful claims, got {len(claimed_ids)}: {claimed_ids}"
+    assert len(set(claimed_ids)) == 3, f"duplicate claim detected: {claimed_ids}"
 
 
 if __name__ == "__main__":
