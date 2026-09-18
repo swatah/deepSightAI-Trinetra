@@ -15,6 +15,13 @@ extraction:
   # Max concurrent frame downloads one embedder process will run while
   # pulling a batch from MinIO.
   embedder_threads: 4
+  # Max concurrent live RTSP camera feeds one extractor process will accept
+  # under normal conditions. Auto-throttling drops the effective ceiling to
+  # this value when the extractor looks degraded (see rtsp_hard_limit).
+  rtsp_soft_limit: 3
+  # Absolute max concurrent RTSP feeds one extractor process will ever
+  # accept, healthy or not. Hard-capped at 6 regardless of what's set here.
+  rtsp_hard_limit: 6
 
 feeds: []
   # - id: cam1
