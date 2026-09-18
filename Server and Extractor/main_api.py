@@ -97,60 +97,21 @@ async def process_video(request: VideoSourceRequest):
 
 @app.post("/process_rtsp_stream")
 async def process_rtsp_stream(request: RtspSourceRequest):
-    # RTSP capacity is per-extractor and numeric (soft/hard limit, current
-    # used count), not the binary busy/available claim used for file jobs --
-    # one extractor can watch several camera feeds at once. So instead of
-    # /get_available_extractor's atomic claim, poll every registered
-    # extractor's own /rtsp_status and pick one with room.
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient() as client:
         try:
-            services_response = await client.get(f"{REGISTRY_URL}/get_all_services")
-            services_response.raise_for_status()
-            extractors = services_response.json().get("extractors", [])
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=500, detail=f"Could not reach registry: {e}")
-
-        if not extractors:
-            raise HTTPException(status_code=503, detail="No extractors registered.")
-
-        async def get_status(extractor_info):
-            try:
-                resp = await client.get(f"{extractor_info['extractor_url']}/rtsp_status")
-                resp.raise_for_status()
-                return extractor_info, resp.json()
-            except httpx.HTTPError:
-                return extractor_info, None
-
-        results = await asyncio.gather(*(get_status(e) for e in extractors))
-
-        # Pick the extractor with the most spare RTSP capacity (fewest
-        # current_used relative to its effective limit), skipping any that
-        # didn't respond or are already at capacity.
-        best = None
-        best_spare = -1
-        for extractor_info, status in results:
-            if status is None:
-                continue
-            spare = status["effective_limit"] - status["current_used"]
-            if spare > 0 and spare > best_spare:
-                best = extractor_info
-                best_spare = spare
-
-        if best is None:
-            raise HTTPException(status_code=503, detail="All extractors are at RTSP capacity.")
-
-        try:
-            dispatch_response = await client.post(
-                f"{best['extractor_url']}/extract_stream",
-                json={"rtsp_url": request.rtsp_url}
-            )
+            response = await client.get(f"{REGISTRY_URL}/get_available_extractor")
+            response.raise_for_status()
+            extractor_info = response.json()
+            extractor_url = f"{extractor_info['extractor_url']}/extract_stream"
+            job_payload = {"rtsp_url": request.rtsp_url}
+            dispatch_response = await client.post(extractor_url, json=job_payload)
             dispatch_response.raise_for_status()
             return {
                 "message": "Stream monitoring job dispatched successfully",
-                "dispatched_to": best
+                "dispatched_to": extractor_info
             }
-        except httpx.HTTPStatusError:
-            raise HTTPException(status_code=503, detail="Chosen extractor rejected the stream (capacity changed).")
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=503, detail="All extractors are currently busy.")
         except httpx.RequestError as e:
             raise HTTPException(status_code=500, detail=f"Could not connect to a service: {e}")
 
