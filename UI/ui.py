@@ -223,7 +223,10 @@ if st.sidebar.button("Run Search", use_container_width=True):
         with st.spinner(f"Searching for '{query_text}'..."):
             st.success("Query received.")
             try:
-                response = requests.post(f"{QUERY_API_URL}/search/text", json={"query": query_text})
+                response = requests.post(
+                    f"{QUERY_API_URL}/search/text",
+                    json={"query": query_text, "query_text": query_text}
+                )
                 if response.status_code == 200:
                     st.session_state.search_results = response.json()
                     st.success(f"Found {len(st.session_state.search_results)} results.")

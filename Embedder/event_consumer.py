@@ -16,11 +16,15 @@ from shared.streaming.schema import FrameReadyEvent
 # We'll import these from embedder.py when running in production
 # They initialize heavy model on import
 try:
-    from embedder import encode_images, get_minio_client, get_milvus_collection, delete_frame_objects, FRAME_BUCKET, register_with_registry, update_embedder_status
+    try:
+        from embedder import encode_images, get_minio_client, get_milvus_collection, FRAME_BUCKET, register_with_registry, update_embedder_status
+    except ImportError:
+        from Embedder.embedder import encode_images, get_minio_client, get_milvus_collection, FRAME_BUCKET, register_with_registry, update_embedder_status
     EMBEDDER_MODULE_AVAILABLE = True
 except Exception as e:
     # During testing, mocks will be provided
     EMBEDDER_MODULE_AVAILABLE = False
+    encode_images = None
 
 logger = logging.getLogger("embedder_consumer")
 
@@ -106,16 +110,31 @@ class EmbedderConsumer:
                 return
 
             # Prepare batch for Milvus
-            video_ids = [event.video_id] * len(feats)
+            import uuid
+            n = len(feats)
+            tenant_id = getattr(event, "tenant_id", None) or "default"
+            camera_id = getattr(event, "camera_id", None) or event.video_id
+            timestamps = getattr(event, "timestamps", None) or [0.0] * n
+            if len(timestamps) != n:
+                timestamps = [0.0] * n
+            pks = [uuid.uuid4().hex for _ in range(n)]
+            video_ids = [event.video_id] * n
+            camera_ids = [camera_id] * n
+            tenant_ids = [tenant_id] * n
             embeddings = feats.cpu().numpy().tolist()
 
+            try:
+                schema_fields = getattr(self.milvus_collection.schema, "fields", [])
+            except Exception:
+                schema_fields = []
+
             # Insert into Milvus (flush after each event for simplicity)
-            self.milvus_collection.insert([video_ids, frame_objects, embeddings])
+            if len(schema_fields) in (3, 4):
+                self.milvus_collection.insert([video_ids, frame_objects, embeddings])
+            else:
+                self.milvus_collection.insert([pks, video_ids, camera_ids, frame_objects, timestamps, embeddings, tenant_ids])
             self.milvus_collection.flush()
             logger.info(f"Inserted {len(video_ids)} embeddings for video {event.video_id}, segment {event.segment_id}")
-
-            # Delete frames from MinIO
-            delete_frame_objects(self.minio_client, frame_objects)
 
         except Exception as e:
             logger.exception(f"Error processing event for video {event.video_id}: {e}")

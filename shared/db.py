@@ -118,3 +118,18 @@ _clear_engine_pool = clear_engine_pool
 # Shared Base class for models (if not using AuthService's Base)
 # Typically repositories import Base from their respective service modules
 Base = declarative_base()
+
+
+def init_tenant_schema(tenant_id: str):
+    """
+    Ensure the tenant schema exists and create all tables registered with Base.
+    """
+    if not isinstance(tenant_id, str):
+        tenant_id = str(tenant_id)
+    safe_tenant_id = "".join(c for c in tenant_id if c.isalnum() or c in "-_")
+    engine = get_tenant_connection(tenant_id)
+    with engine.connect() as conn:
+        conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "tenant_{safe_tenant_id}"'))
+        conn.commit()
+    Base.metadata.create_all(bind=engine)
+

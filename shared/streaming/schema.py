@@ -5,7 +5,7 @@ Uses Pydantic for validation and (de)serialization.
 """
 
 from datetime import datetime
-from typing import List, Literal
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -47,6 +47,9 @@ class FrameReadyEvent(BaseModel):
     sequence_numbers: List[int] = Field(..., min_length=1)  # increasing per frame within segment
     extractor_id: str
     bucket_name: str  # usually 'frames' or 'frames-rtsp-...'
+    tenant_id: str = Field(default="default")
+    camera_id: Optional[str] = None
+    correlation_id: Optional[str] = None
     timestamp: datetime
 
     @field_validator('timestamps')

@@ -4,8 +4,9 @@ import logging
 import tempfile
 import httpx
 from concurrent.futures import ThreadPoolExecutor
-from typing import List
+from typing import List, Optional
 import numpy as np
+import uuid
 
 import torch
 import open_clip
@@ -26,6 +27,7 @@ from pymilvus import (
 from shared.streaming.consumer import StreamConsumer
 from shared.streaming.schema import FrameReadyEvent
 from shared.config import get as get_config
+from shared.milvus import ensure_tenant_collection, connect_milvus_with_retry
 
 #Milvus variables
 MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-standalone")
@@ -125,51 +127,24 @@ if not USE_ONNX or not os.path.exists(ONNX_MODEL_PATH):
         )
     else:
         logger.info("Using online pretrained model: laion2b_s34b_b79k")
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-32", pretrained="laion2b_s34b_b79k"
-        )
-    model.eval()
-    model.to(device)
-    logger.info(f"PyTorch model loaded on device: {device}")
+        try:
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                "ViT-B-32", pretrained="laion2b_s34b_b79k"
+            )
+            model.eval()
+            model.to(device)
+            logger.info(f"PyTorch model loaded on device: {device}")
+        except Exception as e:
+            logger.warning(f"Could not load online OpenCLIP model (offline/sandbox): {e}")
 
-def get_milvus_collection() -> Collection:
+def get_milvus_collection(tenant_id: str = "default") -> Collection:
     """Connect to Milvus and return the collection, creating it + index if missing."""
-    connections.connect("default", host=MILVUS_HOST, port=MILVUS_PORT)
-
-    if utility.has_collection(COLLECTION_NAME):
-        logger.info(f"Milvus collection '{COLLECTION_NAME}' already exists.")
-        return Collection(COLLECTION_NAME)
-
-    logger.info(f"Milvus collection '{COLLECTION_NAME}' not found. Creating...")
-
-    fields = [
-        FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=True),
-        FieldSchema(name="video_id", dtype=DataType.VARCHAR, max_length=256),
-        FieldSchema(name="frame_path", dtype=DataType.VARCHAR, max_length=1024),
-        FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=EMBEDDING_DIM),
-    ]
-    schema = CollectionSchema(fields, description="Video frame embeddings")
-    collection = Collection(COLLECTION_NAME, schema)
-
-    # Clip embedding index creation
-    try:
-        collection.create_index(
-            field_name="embedding",
-            index_params={
-                "index_type": "HNSW",
-                "metric_type": "COSINE",
-                "params": {"M": 16, "efConstruction": 200},
-            },
-        )
-        collection.create_index(
-            field_name="frame_path",
-            index_params={"index_type": "Trie"},
-        )
-    except Exception as e:
-        logger.warning(f"Index creation warning (continuing): {e}")
-
-    logger.info("Milvus collection created and indexes built.")
-    return collection
+    return ensure_tenant_collection(
+        tenant_id=tenant_id,
+        embedding_dim=EMBEDDING_DIM,
+        milvus_host=MILVUS_HOST,
+        milvus_port=MILVUS_PORT
+    )
 
 
 def chunk_list(items: List[str], n: int):
@@ -438,16 +413,31 @@ def encode_images(paths: List[str]) -> torch.Tensor:
 
 
 # Worker function: process a segment (video or RTSP)
-def process_segment_frames(minio_client: Minio, collection: Collection, video_id: str, segment_path: str, frame_objects: List[str]):
+def process_segment_frames(
+    minio_client: Minio,
+    collection: Collection,
+    video_id: str,
+    segment_path: str,
+    frame_objects: List[str],
+    timestamps: Optional[List[float]] = None,
+    tenant_id: str = "default",
+    camera_id: Optional[str] = None
+):
     """Process frames from a video segment."""
+    cid = camera_id or video_id
+    tid = tenant_id or "default"
+
     # Prepare buffers for batched insert
+    buf_pk: List[str] = []
     buf_video_id: List[str] = []
+    buf_camera_id: List[str] = []
     buf_frame_path: List[str] = []
+    buf_timestamp: List[float] = []
     buf_embedding: List[List[float]] = []
-    processed_frames = []  # Track successfully processed frames for deletion
+    buf_tenant_id: List[str] = []
 
     # Process frames in chunks to avoid downloading all at once
-    for frame_batch in chunk_list(frame_objects, FILES_PER_EMBED_BATCH):
+    for batch_idx, frame_batch in enumerate(chunk_list(frame_objects, FILES_PER_EMBED_BATCH)):
         try:
             # Download frames to temporary files
             local_paths = download_frame_objects(minio_client, frame_batch)
@@ -460,14 +450,20 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_id
                 cleanup_temp_files(local_paths)
                 continue
 
+            start_offset = batch_idx * FILES_PER_EMBED_BATCH
             # Add to buffers
-            for frame_obj, vec in zip(frame_batch, feats.cpu().numpy().tolist()):
+            for i, (frame_obj, vec) in enumerate(zip(frame_batch, feats.cpu().numpy().tolist())):
                 # Check for duplicates before adding to buffer
                 if not frame_exists(collection, video_id, frame_obj):
+                    frame_idx = start_offset + i
+                    ts = timestamps[frame_idx] if timestamps and frame_idx < len(timestamps) else 0.0
+                    buf_pk.append(uuid.uuid4().hex)
                     buf_video_id.append(video_id)
-                    buf_frame_path.append(frame_obj)  # Store MinIO object path
+                    buf_camera_id.append(cid)
+                    buf_frame_path.append(frame_obj)
+                    buf_timestamp.append(float(ts))
                     buf_embedding.append(vec)
-                    processed_frames.append(frame_obj)  # Track for deletion
+                    buf_tenant_id.append(tid)
                 else:
                     logger.debug(f"Skipping duplicate frame: {video_id}/{frame_obj}")
 
@@ -478,18 +474,34 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_id
             if len(buf_video_id) >= INSERT_BATCH_SIZE:
                 logger.info(f"Inserting batch of {len(buf_video_id)} vectors into Milvus...")
                 try:
-                    collection.insert([
-                        buf_video_id,
-                        buf_frame_path,
-                        buf_embedding,
-                    ])
+                    schema_fields = getattr(collection.schema, "fields", [])
+                    if len(schema_fields) in (3, 4):
+                        collection.insert([
+                            buf_video_id,
+                            buf_frame_path,
+                            buf_embedding,
+                        ])
+                    else:
+                        collection.insert([
+                            buf_pk,
+                            buf_video_id,
+                            buf_camera_id,
+                            buf_frame_path,
+                            buf_timestamp,
+                            buf_embedding,
+                            buf_tenant_id,
+                        ])
                     collection.flush()
+                    buf_pk.clear()
                     buf_video_id.clear()
+                    buf_camera_id.clear()
                     buf_frame_path.clear()
+                    buf_timestamp.clear()
                     buf_embedding.clear()
+                    buf_tenant_id.clear()
                 except Exception as e:
                     logger.error(f"Error inserting batch into Milvus: {e}")
-                    raise  # Re-raise to skip deletion for this batch
+                    raise
 
             # Optional: free GPU memory between mini-batches
             if torch.cuda.is_available():
@@ -503,48 +515,59 @@ def process_segment_frames(minio_client: Minio, collection: Collection, video_id
     if buf_video_id:
         logger.info(f"Inserting final batch of {len(buf_video_id)} vectors into Milvus...")
         try:
-            collection.insert([
-                buf_video_id,
-                buf_frame_path,
-                buf_embedding,
-            ])
+            schema_fields = getattr(collection.schema, "fields", [])
+            if len(schema_fields) in (3, 4):
+                collection.insert([
+                    buf_video_id,
+                    buf_frame_path,
+                    buf_embedding,
+                ])
+            else:
+                collection.insert([
+                    buf_pk,
+                    buf_video_id,
+                    buf_camera_id,
+                    buf_frame_path,
+                    buf_timestamp,
+                    buf_embedding,
+                    buf_tenant_id,
+                ])
             collection.flush()
         except Exception as e:
             logger.error(f"Error inserting final batch into Milvus: {e}")
-            # Don't delete frames if insertion failed
             return
 
-    # Always delete successfully processed frames to save space
-    if processed_frames:
-        logger.info(f"Deleting {len(processed_frames)} processed frames from {segment_path}")
-        delete_frame_objects(minio_client, processed_frames)
-
-    # Check if segment is now empty after deleting all frames
-    if not check_segment_has_new_frames(minio_client, segment_path):
-        logger.info(f"Segment {segment_path} is now empty, will allow reprocessing")
-        # Don't mark as processed if there are no frames left
-        # This allows the same segment name to be reused for new videos
-    else:
-        # Mark segment as processed only if there are still unprocessed frames
-        mark_segment_processed(minio_client, segment_path)
-        logger.info(f"Finished processing and marked segment as done: {segment_path}")
-        
+    # Mark segment as processed after successful insertion
+    mark_segment_processed(minio_client, segment_path)
+    logger.info(f"Finished processing and marked segment as done: {segment_path}")
     logger.info(f"Completed processing segment: {segment_path}")
 
 
-def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name: str, frame_objects: List[str]):
-    """Process frames from an RTSP bucket."""
-    # Extract video ID from bucket name (frames-rtsp-{EXTRACTOR_ID}-{timestamp})
-    video_id = bucket_name.replace("frames-rtsp-", "")
-    
+def process_rtsp_frames(
+    minio_client: Minio,
+    collection: Collection,
+    bucket_name: str,
+    frame_objects: List[str],
+    timestamps: Optional[List[float]] = None,
+    tenant_id: str = "default",
+    camera_id: Optional[str] = None
+):
+    """Process frames from an RTSP stream/bucket."""
+    cid = camera_id or bucket_name.replace("frames-rtsp-", "")
+    video_id = cid
+    tid = tenant_id or "default"
+
     # Prepare buffers for batched insert
+    buf_pk: List[str] = []
     buf_video_id: List[str] = []
+    buf_camera_id: List[str] = []
     buf_frame_path: List[str] = []
+    buf_timestamp: List[float] = []
     buf_embedding: List[List[float]] = []
-    processed_frames = []  # Track successfully processed frames for deletion
+    buf_tenant_id: List[str] = []
 
     # Process frames in chunks to avoid downloading all at once
-    for frame_batch in chunk_list(frame_objects, FILES_PER_EMBED_BATCH):
+    for batch_idx, frame_batch in enumerate(chunk_list(frame_objects, FILES_PER_EMBED_BATCH)):
         try:
             # Download frames to temporary files
             local_paths = download_rtsp_frame_objects(minio_client, bucket_name, frame_batch)
@@ -557,16 +580,22 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
                 cleanup_temp_files(local_paths)
                 continue
 
+            start_offset = batch_idx * FILES_PER_EMBED_BATCH
             # Add to buffers
-            for frame_obj, vec in zip(frame_batch, feats.cpu().numpy().tolist()):
-                # Check for duplicates before adding to buffer
-                if not frame_exists(collection, video_id, f"{bucket_name}/{frame_obj}"):
+            for i, (frame_obj, vec) in enumerate(zip(frame_batch, feats.cpu().numpy().tolist())):
+                path_to_store = frame_obj if bucket_name == FRAME_BUCKET else f"{bucket_name}/{frame_obj}"
+                if not frame_exists(collection, video_id, path_to_store):
+                    frame_idx = start_offset + i
+                    ts = timestamps[frame_idx] if timestamps and frame_idx < len(timestamps) else time.time()
+                    buf_pk.append(uuid.uuid4().hex)
                     buf_video_id.append(video_id)
-                    buf_frame_path.append(f"{bucket_name}/{frame_obj}")  # Store full bucket/object path
+                    buf_camera_id.append(cid)
+                    buf_frame_path.append(path_to_store)
+                    buf_timestamp.append(float(ts))
                     buf_embedding.append(vec)
-                    processed_frames.append(frame_obj)  # Track for deletion
+                    buf_tenant_id.append(tid)
                 else:
-                    logger.debug(f"Skipping duplicate frame: {bucket_name}/{frame_obj}")
+                    logger.debug(f"Skipping duplicate frame: {video_id}/{path_to_store}")
 
             # Clean up temporary files
             cleanup_temp_files(local_paths)
@@ -575,18 +604,34 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
             if len(buf_video_id) >= INSERT_BATCH_SIZE:
                 logger.info(f"Inserting batch of {len(buf_video_id)} RTSP vectors into Milvus...")
                 try:
-                    collection.insert([
-                        buf_video_id,
-                        buf_frame_path,
-                        buf_embedding,
-                    ])
+                    schema_fields = getattr(collection.schema, "fields", [])
+                    if len(schema_fields) in (3, 4):
+                        collection.insert([
+                            buf_video_id,
+                            buf_frame_path,
+                            buf_embedding,
+                        ])
+                    else:
+                        collection.insert([
+                            buf_pk,
+                            buf_video_id,
+                            buf_camera_id,
+                            buf_frame_path,
+                            buf_timestamp,
+                            buf_embedding,
+                            buf_tenant_id,
+                        ])
                     collection.flush()
+                    buf_pk.clear()
                     buf_video_id.clear()
+                    buf_camera_id.clear()
                     buf_frame_path.clear()
+                    buf_timestamp.clear()
                     buf_embedding.clear()
+                    buf_tenant_id.clear()
                 except Exception as e:
                     logger.error(f"Error inserting RTSP batch into Milvus: {e}")
-                    raise  # Re-raise to skip deletion for this batch
+                    raise
 
             # Optional: free GPU memory between mini-batches
             if torch.cuda.is_available():
@@ -600,25 +645,32 @@ def process_rtsp_frames(minio_client: Minio, collection: Collection, bucket_name
     if buf_video_id:
         logger.info(f"Inserting final batch of {len(buf_video_id)} RTSP vectors into Milvus...")
         try:
-            collection.insert([
-                buf_video_id,
-                buf_frame_path,
-                buf_embedding,
-            ])
+            schema_fields = getattr(collection.schema, "fields", [])
+            if len(schema_fields) in (3, 4):
+                collection.insert([
+                    buf_video_id,
+                    buf_frame_path,
+                    buf_embedding,
+                ])
+            else:
+                collection.insert([
+                    buf_pk,
+                    buf_video_id,
+                    buf_camera_id,
+                    buf_frame_path,
+                    buf_timestamp,
+                    buf_embedding,
+                    buf_tenant_id,
+                ])
             collection.flush()
         except Exception as e:
             logger.error(f"Error inserting final RTSP batch into Milvus: {e}")
-            # Don't delete frames if insertion failed
             return
 
-    # Always delete successfully processed frames to save space
-    if processed_frames:
-        logger.info(f"Deleting {len(processed_frames)} processed frames from RTSP bucket {bucket_name}")
-        delete_rtsp_frame_objects(minio_client, bucket_name, processed_frames)
-
-    # Mark RTSP bucket as processed only after successful inserts and deletions
-    mark_rtsp_bucket_processed(minio_client, bucket_name)
-    logger.info(f"Finished processing and marked RTSP bucket as done: {bucket_name}")
+    # Mark RTSP bucket as processed after successful inserts
+    if bucket_name.startswith("frames-rtsp-"):
+        mark_rtsp_bucket_processed(minio_client, bucket_name)
+        logger.info(f"Finished processing and marked RTSP bucket as done: {bucket_name}")
 
 
 def register_with_registry():
@@ -658,8 +710,6 @@ def process_events():
     Main event loop: consume FrameReadyEvent messages from Redis Stream.
     Replaces the old polling-based process_frames() loop.
     """
-    # Initialize connections
-    collection = get_milvus_collection()
     minio_client = get_minio_client()
     
     # Create Redis Stream consumer
@@ -672,13 +722,14 @@ def process_events():
     # Mark as available when starting
     update_embedder_status("available")
     
-    logger.info("Embedder event consumer started, waiting for FrameReadyEvent messages...")
+    stream_name = os.getenv("FRAME_EVENTS_STREAM", "frames")
+    logger.info(f"Embedder event consumer started on {stream_name}, waiting for FrameReadyEvent messages...")
     
     while True:
         try:
             # Read events from Redis Stream (block up to 5s)
             messages = consumer.read(
-                stream_name="events:frame_ready",
+                stream_name=stream_name,
                 count=10,
                 block_ms=5000
             )
@@ -696,23 +747,31 @@ def process_events():
                         f"({len(event.frame_paths)} frames)"
                     )
 
-                    # The event already carries the exact frame paths uploaded by the
-                    # extractor -- no need to re-list the bucket. RTSP vs file-based is
-                    # distinguished by bucket naming convention (see list_rtsp_buckets).
+                    tenant_id = getattr(event, "tenant_id", None) or "default"
+                    camera_id = getattr(event, "camera_id", None) or event.video_id
+                    timestamps = getattr(event, "timestamps", None)
+                    collection = get_milvus_collection(tenant_id)
+
                     if event.bucket_name.startswith("frames-rtsp-"):
                         process_rtsp_frames(
                             minio_client, collection,
-                            event.bucket_name, event.frame_paths
+                            event.bucket_name, event.frame_paths,
+                            timestamps=timestamps,
+                            tenant_id=tenant_id,
+                            camera_id=camera_id
                         )
                     else:
                         segment_path = f"{event.video_id}/segment_{event.segment_id:04d}"
                         process_segment_frames(
                             minio_client, collection,
-                            event.video_id, segment_path, event.frame_paths
+                            event.video_id, segment_path, event.frame_paths,
+                            timestamps=timestamps,
+                            tenant_id=tenant_id,
+                            camera_id=camera_id
                         )
 
                     # Acknowledge message after successful processing
-                    consumer.ack("events:frame_ready", msg.id)
+                    consumer.ack(stream_name, msg.id)
                     
                 except Exception as e:
                     logger.error(f"Failed to process event {msg.id}: {e}")

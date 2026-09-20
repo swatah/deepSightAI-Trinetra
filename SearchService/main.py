@@ -6,7 +6,7 @@ from PIL import Image
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from pymilvus import connections, Collection
-from typing import List
+from typing import List, Optional, Any
 import numpy as np
 import logging
 
@@ -66,33 +66,45 @@ if not USE_ONNX or not os.path.exists(ONNX_MODEL_PATH):
         )
     else:
         logger.info("Using online pretrained model: laion2b_s34b_b79k")
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-32", pretrained="laion2b_s34b_b79k"
-        )
-    model.eval()
-    model.to(device)
-    logger.info(f"PyTorch model loaded on device: {device}")
+        try:
+            model, _, preprocess = open_clip.create_model_and_transforms(
+                "ViT-B-32", pretrained="laion2b_s34b_b79k"
+            )
+            model.eval()
+            model.to(device)
+            logger.info(f"PyTorch model loaded on device: {device}")
+        except Exception as e:
+            logger.warning(f"Could not load online OpenCLIP model (offline/sandbox): {e}")
 
-def get_milvus_collection() -> Collection:
-    """Connect to Milvus and return the collection."""
-    connections.connect("default", host=MILVUS_HOST, port=MILVUS_PORT)
-    
-    if not utility.has_collection(COLLECTION_NAME):
-        raise HTTPException(status_code=503, detail=f"Milvus collection '{COLLECTION_NAME}' not found")
-    
-    return Collection(COLLECTION_NAME)
+from shared.milvus import ensure_tenant_collection, connect_milvus_with_retry, get_collection_name
 
-# Import utility after defining get_milvus_collection to avoid circular import
-from pymilvus import utility
+def get_milvus_collection(tenant_id: str = "default") -> Collection:
+    """Connect to Milvus and return tenant collection."""
+    return ensure_tenant_collection(
+        tenant_id=tenant_id,
+        embedding_dim=EMBEDDING_DIM,
+        milvus_host=MILVUS_HOST,
+        milvus_port=MILVUS_PORT
+    )
 
 class SearchRequest(BaseModel):
-    query_text: str
+    query_text: Optional[str] = None
+    query: Optional[str] = None
     top_k: int = 10
+    tenant_id: str = "default"
+
+    def get_query(self) -> str:
+        text = self.query_text or self.query or ""
+        if not text.strip():
+            raise ValueError("Query string cannot be empty")
+        return text
 
 class SearchResult(BaseModel):
     video_id: str
     frame_path: str
     score: float
+    camera_id: Optional[str] = None
+    frame_timestamp: Optional[float] = None
 
 @app.on_event("startup")
 async def startup_event():
@@ -111,7 +123,7 @@ async def search_text(request: SearchRequest):
     try:
         # Encode the query text
         with torch.no_grad():
-            text = tokenizer([request.query_text]).to(device)
+            text = tokenizer([request.get_query()]).to(device)
 
             if USE_ONNX and onnx_session:
                 # ONNX inference path for text
@@ -128,7 +140,7 @@ async def search_text(request: SearchRequest):
                 query_embedding = text_features.cpu().numpy().flatten()
         
         # Search Milvus
-        collection = get_milvus_collection()
+        collection = get_milvus_collection(request.tenant_id)
         collection.load()
         
         search_params = {
@@ -136,12 +148,22 @@ async def search_text(request: SearchRequest):
             "params": {"ef": 64}
         }
         
+        output_fields = ["video_id", "frame_path"]
+        try:
+            schema_field_names = [f.name for f in collection.schema.fields]
+            if "camera_id" in schema_field_names:
+                output_fields.append("camera_id")
+            if "frame_timestamp" in schema_field_names:
+                output_fields.append("frame_timestamp")
+        except Exception:
+            pass
+
         results = collection.search(
             data=[query_embedding.tolist()],
             anns_field="embedding",
             param=search_params,
             limit=request.top_k,
-            output_fields=["video_id", "frame_path"]
+            output_fields=output_fields
         )
         
         # Format results
@@ -150,7 +172,9 @@ async def search_text(request: SearchRequest):
             search_results.append(SearchResult(
                 video_id=hit.entity.get("video_id"),
                 frame_path=hit.entity.get("frame_path"),
-                score=hit.score
+                score=hit.score,
+                camera_id=hit.entity.get("camera_id"),
+                frame_timestamp=hit.entity.get("frame_timestamp")
             ))
         
         return search_results

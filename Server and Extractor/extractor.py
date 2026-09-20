@@ -10,6 +10,7 @@ import traceback
 import uuid
 from collections import deque
 from datetime import datetime
+from typing import Optional
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from minio import Minio
@@ -112,17 +113,12 @@ def get_producer() -> StreamProducer:
 
 def publish_frame_ready_event(video_id: str, segment_id: int, frame_paths: list,
                                timestamps: list, sequence_numbers: list,
-                               bucket_name: str = None):
+                               bucket_name: str = None,
+                               tenant_id: str = "default",
+                               camera_id: str = None,
+                               correlation_id: str = None):
     """
     Publish FrameReadyEvent to Redis Streams.
-
-    Args:
-        video_id: Video identifier
-        segment_id: Segment number (0 for RTSP)
-        frame_paths: List of MinIO object paths for frames
-        timestamps: List of frame timestamps (seconds from video start)
-        sequence_numbers: List of sequence numbers within segment
-        bucket_name: Optional bucket name; defaults to FRAME_BUCKET
     """
     if bucket_name is None:
         bucket_name = FRAME_BUCKET
@@ -136,10 +132,12 @@ def publish_frame_ready_event(video_id: str, segment_id: int, frame_paths: list,
             sequence_numbers=sequence_numbers,
             extractor_id=EXTRACTOR_ID,
             bucket_name=bucket_name,
+            tenant_id=tenant_id or "default",
+            camera_id=camera_id,
+            correlation_id=correlation_id,
             timestamp=datetime.utcnow()
         )
-        # Publish to the stream the embedder's consumer group reads from.
-        stream_name = "events:frame_ready"
+        stream_name = os.getenv("FRAME_EVENTS_STREAM", "frames")
         producer = get_producer()
         producer.publish(stream_name, event)
         print(f"[{EXTRACTOR_ID}] Published FrameReadyEvent to {stream_name} for video {video_id}, segment {segment_id}")
@@ -174,12 +172,15 @@ class GStreamerRtspExtractor:
     Connects to an RTSP stream, captures frames, and uploads them to Minio.
     It checks a threading.Event to know when to shut down gracefully.
     """
-    def __init__(self, rtsp_url: str, video_id: str, minio_client, bucket_name: str, shutdown_event: threading.Event):
+    def __init__(self, rtsp_url: str, video_id: str, minio_client, bucket_name: str, shutdown_event: threading.Event,
+                 tenant_id: str = "default", camera_id: str = None):
         self.rtsp_url = rtsp_url
         self.video_id = video_id
         self.minio_client = minio_client
         self.bucket_name = bucket_name
         self.shutdown_event = shutdown_event  # per-stream, not shared with other concurrent streams
+        self.tenant_id = tenant_id or "default"
+        self.camera_id = camera_id or video_id
         self.loop = GLib.MainLoop()
         self.pipeline = None
         self.sequence_counter = 0  # Track sequence numbers within this session
@@ -191,15 +192,10 @@ class GStreamerRtspExtractor:
             err, debug = message.parse_error()
             print(f"[{EXTRACTOR_ID}] GStreamer error (RTSP): {err} {debug}")
             self.stop()
-            # start()'s wait loop only exits when shutdown_event is set -- without
-            # this, a pipeline that dies on its own (bad URL, dropped connection)
-            # never returns from start(), so the background job never finishes and
-            # this stream's capacity slot leaks forever.
-            self.shutdown_event.set()
+            # Do NOT set shutdown_event here so the reconnect loop in run_rtsp_extraction_job can retry
         elif msg_type == Gst.MessageType.EOS:
             print(f"[{EXTRACTOR_ID}] End-of-stream reached for RTSP.")
             self.stop()
-            self.shutdown_event.set()
 
     def on_new_sample(self, sink):
         """Callback triggered when a new frame is available from the appsink."""
@@ -213,7 +209,8 @@ class GStreamerRtspExtractor:
                     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as tmpfile:
                         tmpfile.write(map_info.data)
                         tmpfile.flush()
-                        frame_name = f"frame_{int(time.time() * 1000)}.jpg"
+                        date_str = datetime.utcnow().strftime("%Y-%m-%d")
+                        frame_name = f"{self.tenant_id}/{self.camera_id}/{date_str}/frame_{int(time.time() * 1000)}_{self.sequence_counter:06d}.jpg"
                         self.minio_client.fput_object(self.bucket_name, frame_name, tmpfile.name)
                         print(f"[{EXTRACTOR_ID}] Uploaded {frame_name} to bucket {self.bucket_name}")
                         _rtsp_record_latency(time.monotonic() - frame_start)
@@ -223,15 +220,16 @@ class GStreamerRtspExtractor:
                             # For RTSP, segment_id is always 0
                             seq_num = self.sequence_counter
                             self.sequence_counter += 1
-                            # Estimate timestamp: use time.time() or buffer PTS? Use current time as approximation
-                            timestamp = time.time()  # could also derive from buffer timestamp if available
+                            timestamp = time.time()
                             publish_frame_ready_event(
                                 video_id=self.video_id,
                                 segment_id=0,
                                 frame_paths=[frame_name],
                                 timestamps=[timestamp],
                                 sequence_numbers=[seq_num],
-                                bucket_name=self.bucket_name
+                                bucket_name=self.bucket_name,
+                                tenant_id=self.tenant_id,
+                                camera_id=self.camera_id
                             )
                         except Exception as e:
                             print(f"[{EXTRACTOR_ID}] Failed to publish frame event: {e}")
@@ -284,12 +282,17 @@ class FileJobRequest(BaseModel):
     segment_id: int
     start_time: float
     duration: float
+    tenant_id: str = "default"
+    camera_id: Optional[str] = None
 
 class RtspJobRequest(BaseModel):
     rtsp_url: str
+    tenant_id: str = "default"
+    camera_id: Optional[str] = None
 
 # --- BACKGROUND JOB FUNCTIONS ---
-def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, duration: float):
+def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, duration: float,
+                            tenant_id: str = "default", camera_id: Optional[str] = None):
     """Background task to process a segment of a video file from Minio."""
     _job_slots.acquire()
     with httpx.Client() as client:
@@ -315,18 +318,16 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
             os.makedirs(frames_output_dir, exist_ok=True)
             extractor = GStreamerFileExtractor()
             extractor.extract_frames(temp_segment_path, frames_output_dir)
-            # Derive video_id from the filename without extension
             video_basename = os.path.splitext(os.path.basename(video_uri))[0]
+            cid = camera_id or video_basename
+            date_str = datetime.utcnow().strftime("%Y-%m-%d")
 
             # Sort frames to ensure correct sequence
             frame_files = sorted([f for f in os.listdir(frames_output_dir) if f.endswith(".jpg")])
             for seq_num, frame_file in enumerate(frame_files):
                 local_frame_path = os.path.join(frames_output_dir, frame_file)
-                minio_object_name = f"{video_basename}/segment_{segment_id:04d}/{frame_file}"
+                minio_object_name = f"{tenant_id}/{cid}/{date_str}/{video_basename}/segment_{segment_id:04d}/{frame_file}"
                 minio_client.fput_object(FRAME_BUCKET, minio_object_name, local_frame_path)
-                # Collect metadata
-                # frame_file format: frame_XXXXX.jpg; GStreamer outputs sequentially
-                # at EXTRACTION_FPS, so consecutive frames are 1/EXTRACTION_FPS apart.
                 timestamp = start_time + seq_num / EXTRACTION_FPS
                 uploaded_frames.append({
                     "object_name": minio_object_name,
@@ -338,14 +339,15 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
 
             # Publish FrameReadyEvent
             if uploaded_frames:
-                video_id = video_basename  # Use video basename as video_id
                 publish_frame_ready_event(
-                    video_id=video_id,
+                    video_id=video_basename,
                     segment_id=segment_id,
                     frame_paths=[f["object_name"] for f in uploaded_frames],
                     timestamps=[f["timestamp"] for f in uploaded_frames],
                     sequence_numbers=[f["sequence_number"] for f in uploaded_frames],
-                    bucket_name=FRAME_BUCKET
+                    bucket_name=FRAME_BUCKET,
+                    tenant_id=tenant_id,
+                    camera_id=cid
                 )
 
         except Exception:
@@ -355,7 +357,8 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
                 client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=available")
             _job_slots.release()
 
-def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threading.Event):
+def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threading.Event,
+                            tenant_id: str = "default", camera_id: Optional[str] = None):
     """Background task to process a live RTSP stream. Runs alongside other
     concurrent RTSP streams in this same process, up to the soft/hard limit --
     see _active_rtsp_streams. Not gated by _job_slots (that's for file jobs)
@@ -363,16 +366,35 @@ def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threadi
     capacity is tracked separately via _rtsp_effective_limit()/GET /rtsp_status."""
     clean_minio_url = MINIO_URL.replace("http://", "").replace("https://", "")
     minio_client = Minio(clean_minio_url, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=False)
-    rtsp_bucket = f"frames-rtsp-{EXTRACTOR_ID}-{int(time.time())}"
+    ensure_bucket(minio_client, FRAME_BUCKET)
 
-    # Generate a video_id for this RTSP stream session (use bucket name or a UUID)
-    video_id = rtsp_bucket  # Use bucket as video_id
+    cid = camera_id or stream_id
+    video_id = cid
 
-    extractor = GStreamerRtspExtractor(rtsp_url, video_id, minio_client, rtsp_bucket, stream_event)
+    backoff = 2
+    max_backoff = 32
     try:
-        extractor.start()
-    except Exception as e:
-        print(f"[{EXTRACTOR_ID}] Error during RTSP extraction job: {e}")
+        while not stream_event.is_set():
+            extractor = GStreamerRtspExtractor(
+                rtsp_url=rtsp_url,
+                video_id=video_id,
+                minio_client=minio_client,
+                bucket_name=FRAME_BUCKET,
+                shutdown_event=stream_event,
+                tenant_id=tenant_id,
+                camera_id=cid
+            )
+            try:
+                extractor.start()
+            except Exception as e:
+                print(f"[{EXTRACTOR_ID}] Error during RTSP extraction job: {e}")
+
+            if stream_event.is_set():
+                break
+
+            print(f"[{EXTRACTOR_ID}] RTSP stream disconnected for {rtsp_url}, retrying in {backoff}s...")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
     finally:
         with _rtsp_lock:
             _active_rtsp_streams.pop(stream_id, None)
@@ -402,7 +424,15 @@ def on_startup():
 @app.post("/extract")
 def extract(request: FileJobRequest, background_tasks: BackgroundTasks):
     """Endpoint to start a job for a video file segment."""
-    background_tasks.add_task(run_file_extraction_job, request.video_uri, request.segment_id, request.start_time, request.duration)
+    background_tasks.add_task(
+        run_file_extraction_job,
+        request.video_uri,
+        request.segment_id,
+        request.start_time,
+        request.duration,
+        request.tenant_id,
+        request.camera_id
+    )
     return {"message": "Job for file segment started."}
 
 @app.post("/extract_stream")
@@ -417,7 +447,14 @@ def extract_stream(request: RtspJobRequest, background_tasks: BackgroundTasks):
         stream_event = threading.Event()
         _active_rtsp_streams[stream_id] = stream_event
 
-    background_tasks.add_task(run_rtsp_extraction_job, request.rtsp_url, stream_id, stream_event)
+    background_tasks.add_task(
+        run_rtsp_extraction_job,
+        request.rtsp_url,
+        stream_id,
+        stream_event,
+        request.tenant_id,
+        request.camera_id
+    )
     return {"message": "Job for RTSP stream started.", "stream_id": stream_id}
 
 @app.get("/rtsp_status")

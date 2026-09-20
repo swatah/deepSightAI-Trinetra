@@ -19,8 +19,47 @@ from pymilvus import (
 )
 
 
+import time
+import logging
+
+logger = logging.getLogger("shared.milvus")
+
 # Default embedding dimension for CLIP ViT-B-32
 DEFAULT_EMBEDDING_DIM = 512
+
+
+def connect_milvus_with_retry(
+    alias: str = "default",
+    host: Optional[str] = None,
+    port: Optional[str] = None,
+    max_retries: int = 5,
+    initial_delay: float = 1.0,
+    backoff_factor: float = 2.0
+):
+    """Connect to Milvus with exponential backoff retry."""
+    host = host or os.getenv("MILVUS_HOST", "milvus-standalone")
+    port = port or os.getenv("MILVUS_PORT", "19530")
+
+    if connections.has_connection(alias):
+        return
+
+    delay = initial_delay
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            connections.connect(alias=alias, host=host, port=port)
+            logger.info(f"Connected to Milvus at {host}:{port} (alias={alias})")
+            return
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Failed to connect to Milvus at {host}:{port} (attempt {attempt}/{max_retries}): {e}"
+            )
+            if attempt < max_retries:
+                time.sleep(delay)
+                delay *= backoff_factor
+
+    raise RuntimeError(f"Could not connect to Milvus after {max_retries} attempts: {last_err}")
 
 
 def get_collection_name(tenant_id: str) -> str:
@@ -55,24 +94,11 @@ def ensure_tenant_collection(
 
     Returns:
         The Milvus Collection instance.
-
-    Note:
-        Collection schema:
-        - pk: VARCHAR(primary key) - frame identifier
-        - video_id: VARCHAR - source video ID
-        - frame_path: VARCHAR - MinIO object key (tenant-prefixed)
-        - embedding: FLOAT_VECTOR[embedding_dim] - CLIP embedding
-        - tenant_id: VARCHAR (redundant but for safety)
     """
     host = milvus_host or os.getenv("MILVUS_HOST", "milvus-standalone")
     port = milvus_port or os.getenv("MILVUS_PORT", "19530")
 
-    # Connect to Milvus (reuses connection if already connected)
-    connections.connect(
-        alias="default",
-        host=host,
-        port=port
-    )
+    connect_milvus_with_retry(alias="default", host=host, port=port)
 
     collection_name = get_collection_name(tenant_id)
 
@@ -84,7 +110,9 @@ def ensure_tenant_collection(
     fields = [
         FieldSchema(name="pk", dtype=DataType.VARCHAR, max_length=255, is_primary=True),
         FieldSchema(name="video_id", dtype=DataType.VARCHAR, max_length=255),
+        FieldSchema(name="camera_id", dtype=DataType.VARCHAR, max_length=255),
         FieldSchema(name="frame_path", dtype=DataType.VARCHAR, max_length=1024),
+        FieldSchema(name="frame_timestamp", dtype=DataType.DOUBLE),
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=embedding_dim),
         FieldSchema(name="tenant_id", dtype=DataType.VARCHAR, max_length=255),
     ]

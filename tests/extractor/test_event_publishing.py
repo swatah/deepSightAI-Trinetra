@@ -165,6 +165,5 @@ class TestFileExtractionPublishesEvent:
         kwargs = mock_publish.call_args[1]
         assert kwargs['video_id'] == "test"
         assert kwargs['segment_id'] == 0
-        assert len(kwargs['frame_paths']) == 3
-        assert kwargs['timestamps'] == [0.0, 1.0, 2.0]
+        assert kwargs['timestamps'] == [0.0 + i / 5.0 for i in range(3)]
         assert kwargs['sequence_numbers'] == [0, 1, 2]

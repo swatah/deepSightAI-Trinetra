@@ -7,7 +7,7 @@ the tenant-scoped session provided by get_tenant_session().
 
 from shared.db import get_tenant_session
 from sqlalchemy.orm import Session
-from typing import TypeVar, Generic, Type
+from typing import TypeVar, Generic, Type, List, Optional
 from datetime import datetime
 
 T = TypeVar('T')  # Model type

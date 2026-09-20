@@ -4,6 +4,7 @@ import ffmpeg
 import asyncio
 import os
 import tempfile
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Request
 from pydantic import BaseModel
 from minio import Minio
@@ -20,9 +21,13 @@ VIDEO_BUCKET = "videos"
 # --- PYDANTIC MODELS ---
 class VideoSourceRequest(BaseModel):
     video_uri: str
+    tenant_id: str = "default"
+    camera_id: Optional[str] = None
 
 class RtspSourceRequest(BaseModel):
     rtsp_url: str
+    tenant_id: str = "default"
+    camera_id: Optional[str] = None
 
 # --- AUTH DEPENDENCY ---
 try:
@@ -54,7 +59,7 @@ def fetch_video_from_minio(object_key: str) -> str:
 
 # --- API ENDPOINTS ---
 @app.post("/process_video")
-async def process_video(request: VideoSourceRequest):
+async def process_video(request: VideoSourceRequest, http_request: Request):
     try:
         local_video_path = fetch_video_from_minio(request.video_uri)
     except Exception as e:
@@ -71,7 +76,12 @@ async def process_video(request: VideoSourceRequest):
     except ffmpeg.Error as e:
         raise HTTPException(status_code=400, detail=f"Failed to probe video file: {e.stderr.decode()}")
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    forward_headers = {}
+    incoming_auth = http_request.headers.get("Authorization")
+    if incoming_auth:
+        forward_headers["Authorization"] = incoming_auth
+
+    async with httpx.AsyncClient(timeout=30.0, headers=forward_headers) as client:
         tasks = []
         for i, seg in enumerate(segments):
             try:
@@ -83,7 +93,9 @@ async def process_video(request: VideoSourceRequest):
                     "video_uri": request.video_uri,
                     "segment_id": i,
                     "start_time": seg['start'],
-                    "duration": seg['duration']
+                    "duration": seg['duration'],
+                    "tenant_id": request.tenant_id,
+                    "camera_id": request.camera_id
                 }
                 task = client.post(extractor_url, json=job_payload)
                 tasks.append(task)
@@ -153,7 +165,11 @@ async def process_rtsp_stream(request: RtspSourceRequest, http_request: Request)
         try:
             dispatch_response = await client.post(
                 f"{best['extractor_url']}/extract_stream",
-                json={"rtsp_url": request.rtsp_url}
+                json={
+                    "rtsp_url": request.rtsp_url,
+                    "tenant_id": request.tenant_id,
+                    "camera_id": request.camera_id
+                }
             )
             dispatch_response.raise_for_status()
             return {

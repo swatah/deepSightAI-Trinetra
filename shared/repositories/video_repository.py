@@ -5,6 +5,7 @@ Stores and retrieves video records within a tenant's schema.
 """
 
 from datetime import datetime
+from typing import List, Optional
 from sqlalchemy import Column, Integer, String, DateTime
 from shared.db import Base
 from .base import BaseRepository
