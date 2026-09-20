@@ -3,6 +3,7 @@ import time
 import logging
 import tempfile
 import httpx
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 import numpy as np
@@ -673,6 +674,33 @@ def process_rtsp_frames(
         logger.info(f"Finished processing and marked RTSP bucket as done: {bucket_name}")
 
 
+shutdown_event = threading.Event()
+_heartbeat_thread = None
+
+
+def start_embedder_heartbeat_thread(interval: float = 30.0) -> threading.Thread:
+    """Starts a background daemon thread reporting heartbeats to central registry every 30s."""
+    global _heartbeat_thread
+    if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
+        return _heartbeat_thread
+
+    def _loop():
+        while not shutdown_event.is_set():
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    client.post(
+                        f"{REGISTRY_URL}/heartbeat",
+                        params={"worker_id": EMBEDDER_ID, "worker_type": "embedder"}
+                    )
+            except Exception:
+                pass
+            shutdown_event.wait(interval)
+
+    _heartbeat_thread = threading.Thread(target=_loop, daemon=True, name="embedder-heartbeat")
+    _heartbeat_thread.start()
+    return _heartbeat_thread
+
+
 def register_with_registry():
     """Register this embedder with the central registry."""
     try:
@@ -688,6 +716,7 @@ def register_with_registry():
             logger.info(f"Successfully registered embedder {EMBEDDER_ID} with registry")
     except Exception as e:
         logger.error(f"Failed to register with registry: {e}")
+    start_embedder_heartbeat_thread()
 
 
 def update_embedder_status(status: str):

@@ -32,14 +32,17 @@ for offset = 0, num - 1 do
     local instance_id = ids[idx + 1]
     local key = prefix .. ":" .. instance_id
     local status = redis.call("HGET", key, "status")
+    local last_heartbeat = tonumber(redis.call("HGET", key, "last_heartbeat") or "0")
     local busy_since = tonumber(redis.call("HGET", key, "busy_since") or "0")
-    if status == "busy" and busy_since > 0 and (now - busy_since) > timeout then
+    local hb_check = last_heartbeat > 0 and last_heartbeat or busy_since
+    -- Reclaim worker only if its heartbeat has ceased for longer than timeout (worker crashed or dead)
+    if status == "busy" and hb_check > 0 and (now - hb_check) > timeout then
         status = "available"
         redis.call("HSET", key, "status", "available")
         redis.call("HDEL", key, "busy_since")
     end
     if status == "available" then
-        redis.call("HSET", key, "status", "busy", "busy_since", tostring(now))
+        redis.call("HSET", key, "status", "busy", "busy_since", tostring(now), "last_heartbeat", tostring(now))
         redis.call("SET", KEYS[1], (idx + 1) % num)
         local url = redis.call("HGET", key, prefix .. "_url")
         return {instance_id, url}
@@ -68,11 +71,13 @@ app = FastAPI(title="Central Registry (Redis)")
 def register_extractor(extractor: ExtractorRegister):
     """Registers or updates an extractor's info and sets its status to available."""
     extractor_key = f"extractor:{extractor.extractor_id}"
+    now = str(int(time.time()))
     # Store extractor info in a Redis Hash
     r.hset(extractor_key, mapping={
         "extractor_id": extractor.extractor_id,
         "extractor_url": extractor.extractor_url,
-        "status": "available"
+        "status": "available",
+        "last_heartbeat": now
     })
     return {"message": f"Extractor {extractor.extractor_id} registered."}
 
@@ -80,11 +85,13 @@ def register_extractor(extractor: ExtractorRegister):
 def register_embedder(embedder: EmbedderRegister):
     """Registers or updates an embedder's info and sets its status to available."""
     embedder_key = f"embedder:{embedder.embedder_id}"
+    now = str(int(time.time()))
     # Store embedder info in a Redis Hash
     r.hset(embedder_key, mapping={
         "embedder_id": embedder.embedder_id,
         "embedder_url": embedder.embedder_url,
-        "status": "available"
+        "status": "available",
+        "last_heartbeat": now
     })
     return {"message": f"Embedder {embedder.embedder_id} registered."}
 
@@ -95,8 +102,11 @@ def update_extractor_status(extractor_id: str, status: str):
     if not r.exists(extractor_key):
         raise HTTPException(status_code=404, detail="Extractor not found")
     
-    # Update the status field in the Hash
-    r.hset(extractor_key, "status", status)
+    # Update the status field and last_heartbeat in the Hash
+    r.hset(extractor_key, mapping={
+        "status": status,
+        "last_heartbeat": str(int(time.time()))
+    })
     if status == "available":
         r.hdel(extractor_key, "busy_since")
     return {"message": "Status updated"}
@@ -108,8 +118,11 @@ def update_embedder_status(embedder_id: str, status: str):
     if not r.exists(embedder_key):
         raise HTTPException(status_code=404, detail="Embedder not found")
     
-    # Update the status field in the Hash
-    r.hset(embedder_key, "status", status)
+    # Update the status field and last_heartbeat in the Hash
+    r.hset(embedder_key, mapping={
+        "status": status,
+        "last_heartbeat": str(int(time.time()))
+    })
     if status == "available":
         r.hdel(embedder_key, "busy_since")
     return {"message": "Embedder status updated"}

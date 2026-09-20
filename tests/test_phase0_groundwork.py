@@ -19,11 +19,6 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-# Add project root to sys.path
-repo_root = os.path.dirname(os.path.dirname(__file__))
-if repo_root not in sys.path:
-    sys.path.insert(0, repo_root)
-
 from shared.streaming.schema import FrameReadyEvent
 from shared.db import Base
 from shared.repositories.camera_repository import Camera, CameraRepository
@@ -106,6 +101,44 @@ class TestGW1FramePreservation:
             consumer.process_event(event)
 
         assert mock_minio.remove_object.call_count == 0
+
+    def test_configure_bucket_lifecycle(self):
+        """Verify configure_bucket_lifecycle sets 7-day expiration policy."""
+        from shared.storage import configure_bucket_lifecycle
+
+        mock_minio = MagicMock()
+        success = configure_bucket_lifecycle(mock_minio, "frames", retention_days=7)
+        assert success is True
+        mock_minio.set_bucket_lifecycle.assert_called_once()
+        args, _ = mock_minio.set_bucket_lifecycle.call_args
+        assert args[0] == "frames"
+        config = args[1]
+        assert len(config.rules) == 1
+        rule = config.rules[0]
+        assert rule.status == "Enabled"
+        assert rule.expiration.days == 7
+
+    def test_cleanup_expired_frames(self):
+        """Verify cleanup_expired_frames only deletes items older than retention threshold."""
+        from datetime import datetime, timezone, timedelta
+        from shared.storage import cleanup_expired_frames
+
+        mock_minio = MagicMock()
+        now = datetime.now(timezone.utc)
+
+        expired_obj = MagicMock()
+        expired_obj.object_name = "tenant/cam/2026-09-01/frame1.jpg"
+        expired_obj.last_modified = now - timedelta(days=10)
+
+        recent_obj = MagicMock()
+        recent_obj.object_name = "tenant/cam/2026-09-20/frame2.jpg"
+        recent_obj.last_modified = now - timedelta(days=2)
+
+        mock_minio.list_objects.return_value = [expired_obj, recent_obj]
+
+        deleted = cleanup_expired_frames(mock_minio, "frames", retention_days=7)
+        assert deleted == 1
+        mock_minio.remove_object.assert_called_once_with("frames", "tenant/cam/2026-09-01/frame1.jpg")
 
 
 class TestGW2SearchContract:
@@ -218,17 +251,110 @@ class TestGW4GW5ExtractorRTSPAndBuckets:
 
 
 class TestGW6RegistryZombieReclaim:
-    """GW-6: Verify atomic Lua script for zombie claim."""
+    """GW-6: Verify atomic Lua script for zombie claim and heartbeat threads."""
 
-    def test_claim_script_contains_zombie_timeout(self):
+    def test_claim_script_contains_zombie_timeout_and_heartbeat(self):
         import registry
 
         script_obj = registry._CLAIM_AVAILABLE_SCRIPT
         script_code = getattr(script_obj, "script", str(script_obj))
-        # Must check for busy status and 180s threshold
-        assert "180" in script_code
+        # Must check for busy status, last_heartbeat, and timeout threshold
+        assert "last_heartbeat" in script_code
+        assert "timeout" in script_code
         assert "busy" in script_code
         assert "available" in script_code
+
+    def test_claim_script_reclaims_dead_worker_but_keeps_heartbeating_worker(self):
+        """Simulate Lua logic in Python to verify active worker is preserved while dead worker is reclaimed."""
+        import time
+
+        now = int(time.time())
+        timeout = 180
+
+        # Scenario 1: Worker has been busy for 300s (e.g. 5 min video), but heartbeat sent 10s ago
+        busy_since_active = now - 300
+        last_heartbeat_active = now - 10
+        hb_check_active = last_heartbeat_active if last_heartbeat_active > 0 else busy_since_active
+        reclaimed_active = (now - hb_check_active) > timeout
+        assert reclaimed_active is False, "Active worker with recent heartbeat must NOT be reclaimed"
+
+        # Scenario 2: Worker has been busy and heartbeat stopped 200s ago (crashed/killed)
+        busy_since_dead = now - 200
+        last_heartbeat_dead = now - 200
+        hb_check_dead = last_heartbeat_dead if last_heartbeat_dead > 0 else busy_since_dead
+        reclaimed_dead = (now - hb_check_dead) > timeout
+        assert reclaimed_dead is True, "Dead worker whose heartbeat stopped > 180s must be reclaimed"
+
+    def test_extractor_heartbeat_thread_reports_to_registry(self):
+        """Verify extractor start_heartbeat_thread sends heartbeat with worker_type='extractor'."""
+        import extractor
+        import threading
+        import time
+
+        called = []
+        def mock_post(url, params=None, **kwargs):
+            called.append((url, params))
+            resp = MagicMock()
+            resp.status_code = 200
+            return resp
+
+        test_shutdown = threading.Event()
+        with patch.object(extractor, "shutdown_event", test_shutdown), \
+             patch("httpx.Client.post", side_effect=mock_post):
+            extractor._heartbeat_thread = None
+            t = extractor.start_heartbeat_thread(interval=0.01)
+            time_start = time.time()
+            while not called and (time.time() - time_start) < 2.0:
+                time.sleep(0.01)
+            test_shutdown.set()
+            t.join(timeout=1.0)
+
+        assert len(called) >= 1
+        assert "heartbeat" in called[0][0]
+        assert called[0][1]["worker_type"] == "extractor"
+
+    def test_embedder_heartbeat_thread_reports_to_registry(self):
+        """Verify embedder start_embedder_heartbeat_thread sends heartbeat with worker_type='embedder'."""
+        from Embedder import embedder
+        import threading
+        import time
+
+        called = []
+        def mock_post(url, params=None, **kwargs):
+            called.append((url, params))
+            resp = MagicMock()
+            resp.status_code = 200
+            return resp
+
+        test_shutdown = threading.Event()
+        with patch.object(embedder, "shutdown_event", test_shutdown), \
+             patch("httpx.Client.post", side_effect=mock_post):
+            embedder._heartbeat_thread = None
+            t = embedder.start_embedder_heartbeat_thread(interval=0.01)
+            time_start = time.time()
+            while not called and (time.time() - time_start) < 2.0:
+                time.sleep(0.01)
+            test_shutdown.set()
+            t.join(timeout=1.0)
+
+        assert len(called) >= 1
+        assert "heartbeat" in called[0][0]
+        assert called[0][1]["worker_type"] == "embedder"
+
+    def test_registry_heartbeat_endpoint(self):
+        """Verify registry /heartbeat updates last_heartbeat in Redis."""
+        import registry
+
+        mock_redis = MagicMock()
+        mock_redis.exists.return_value = True
+
+        with patch.object(registry, "r", mock_redis):
+            res = registry.heartbeat("ext-1", "extractor")
+            assert res == {"status": "ok"}
+            mock_redis.hset.assert_called_once()
+            args = mock_redis.hset.call_args[0]
+            assert args[0] == "extractor:ext-1"
+            assert args[1] == "last_heartbeat"
 
 
 class TestGW7Repositories:

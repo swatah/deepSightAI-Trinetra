@@ -20,6 +20,7 @@ import threading
 from shared.streaming.producer import StreamProducer
 from shared.streaming.schema import FrameReadyEvent
 from shared.config import get as get_config
+from shared.storage import configure_bucket_lifecycle
 
 # --- GStreamer and GObject Imports ---
 gi.require_version('Gst', '1.0')
@@ -90,10 +91,12 @@ def _rtsp_effective_limit() -> int:
     return RTSP_SOFT_LIMIT if _rtsp_is_degraded() else RTSP_HARD_LIMIT
 
 def ensure_bucket(minio_client, bucket_name):
-    """Helper function to create a Minio bucket if it doesn't already exist."""
+    """Helper function to create a Minio bucket if it doesn't already exist and configure retention."""
     try:
         if not minio_client.bucket_exists(bucket_name):
             minio_client.make_bucket(bucket_name)
+        if bucket_name == FRAME_BUCKET:
+            configure_bucket_lifecycle(minio_client, bucket_name, retention_days=7)
     except S3Error as err:
         if err.code != "BucketAlreadyOwnedByYou":
             raise
@@ -415,11 +418,40 @@ app = FastAPI(
     dependencies=[Depends(require_auth)] if AUTH_AVAILABLE else []
 )
 
+_heartbeat_thread = None
+
+
+def start_heartbeat_thread(interval: float = 30.0) -> threading.Thread:
+    """Starts a background daemon thread reporting heartbeats to central registry every 30s."""
+    global _heartbeat_thread
+    if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
+        return _heartbeat_thread
+
+    def _loop():
+        while not shutdown_event.is_set():
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    client.post(
+                        f"{REGISTRY_URL}/heartbeat",
+                        params={"worker_id": EXTRACTOR_ID, "worker_type": "extractor"}
+                    )
+            except Exception:
+                pass
+            shutdown_event.wait(interval)
+
+    _heartbeat_thread = threading.Thread(target=_loop, daemon=True, name="extractor-heartbeat")
+    _heartbeat_thread.start()
+    return _heartbeat_thread
+
 @app.on_event("startup")
 def on_startup():
-    """Register the extractor with the central registry on startup."""
-    with httpx.Client() as client:
-        client.post(f"{REGISTRY_URL}/register", json={"extractor_id": EXTRACTOR_ID, "extractor_url": EXTRACTOR_URL})
+    """Register the extractor with the central registry and start heartbeat thread on startup."""
+    try:
+        with httpx.Client() as client:
+            client.post(f"{REGISTRY_URL}/register", json={"extractor_id": EXTRACTOR_ID, "extractor_url": EXTRACTOR_URL})
+    except Exception as e:
+        print(f"[{EXTRACTOR_ID}] Failed to register with registry on startup: {e}")
+    start_heartbeat_thread()
 
 @app.post("/extract")
 def extract(request: FileJobRequest, background_tasks: BackgroundTasks):
