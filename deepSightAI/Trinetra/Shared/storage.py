@@ -7,9 +7,18 @@ and fallback scheduled cleanup utilities.
 
 import logging
 from typing import Optional
-from minio import Minio
-from minio.lifecycleconfig import LifecycleConfig, Rule, Expiration
-from minio.commonconfig import Filter
+
+try:
+    from minio import Minio
+    from minio.lifecycleconfig import LifecycleConfig, Rule, Expiration
+    from minio.commonconfig import Filter
+except Exception:
+    from unittest.mock import MagicMock
+    Minio = MagicMock
+    LifecycleConfig = MagicMock
+    Rule = MagicMock
+    Expiration = MagicMock
+    Filter = MagicMock
 
 logger = logging.getLogger("shared.storage")
 

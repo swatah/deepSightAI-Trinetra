@@ -11,12 +11,6 @@ from pathlib import Path
 import os
 from datetime import datetime
 
-# Add repo root to path: test file is at tests/extractor/test_...py
-# repo_root is the project root containing Server and Extractor
-repo_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(repo_root))
-sys.path.insert(0, str(repo_root / "Server and Extractor"))
-
 # Mock external dependencies if they are not installed to allow module import for testing
 # GStreamer
 try:

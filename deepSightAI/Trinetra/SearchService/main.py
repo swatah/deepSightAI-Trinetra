@@ -4,7 +4,7 @@ import open_clip
 import onnxruntime as ort
 from PIL import Image
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from pymilvus import connections, Collection
 from typing import List, Optional, Any
 import numpy as np
@@ -92,6 +92,12 @@ class SearchRequest(BaseModel):
     query: Optional[str] = None
     top_k: int = 10
     tenant_id: str = "default"
+
+    @model_validator(mode="after")
+    def check_query_present(self):
+        if self.query_text is None and self.query is None:
+            raise ValueError("Query text or query is required")
+        return self
 
     def get_query(self) -> str:
         text = self.query_text or self.query or ""

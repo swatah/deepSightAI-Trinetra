@@ -5,7 +5,7 @@ All concrete repositories must inherit from BaseRepository and use
 the tenant-scoped session provided by get_tenant_session().
 """
 
-from shared.db import get_tenant_session
+from ..db import get_tenant_session
 from sqlalchemy.orm import Session
 from typing import TypeVar, Generic, Type, List, Optional
 from datetime import datetime

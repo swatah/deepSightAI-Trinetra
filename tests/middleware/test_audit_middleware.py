@@ -13,11 +13,6 @@ from pathlib import Path
 import os
 import sys
 
-# Add repo root to sys.path to import shared.middleware
-repo_root = Path(__file__).resolve().parent.parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
 # Mock external dependencies (AuditService) before import
 sys.modules['AuditService'] = MagicMock()
 # Also other heavy deps if needed? Not needed.

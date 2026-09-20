@@ -13,20 +13,12 @@ from pathlib import Path
 import os
 import sys
 
-# Add repo root to sys.path to import top-level packages (AuditService, Embedder, etc.)
-repo_root = Path(__file__).resolve().parent.parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
 # Mock all heavy third-party dependencies before import
 sys.modules['psycopg2'] = MagicMock()
 sys.modules['psycopg2.extras'] = MagicMock()
 sys.modules['kafka'] = MagicMock()
 sys.modules['kafka.producer'] = MagicMock()
 sys.modules['jsonschema'] = MagicMock()
-# Debug
-print(f"DEBUG: sys.path[:3] = {sys.path[:3]}")
-print(f"DEBUG: cwd = {os.getcwd()}, repo_root = {repo_root}")
 
 # Import after mocks
 try:

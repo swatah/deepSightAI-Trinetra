@@ -13,16 +13,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 from jose import jwt
-from auth_service import (
+from AuthService.auth_service import (
     app, User, Base, get_db, create_access_token,
     PUBLIC_KEY, ALGORITHM
 )
 from shared.middleware import set_jwt_public_key
 import sys
 import os
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "AuthService"))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 SQLITE_DB = "sqlite:////tmp/test_oauth.db"
 

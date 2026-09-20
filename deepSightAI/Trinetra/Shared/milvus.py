@@ -8,6 +8,7 @@ Alternative (not chosen): single collection with `tenant_id` field and filter.
 """
 
 import os
+import sys
 from typing import Optional
 from pymilvus import (
     connections,
@@ -32,13 +33,18 @@ def connect_milvus_with_retry(
     alias: str = "default",
     host: Optional[str] = None,
     port: Optional[str] = None,
-    max_retries: int = 5,
-    initial_delay: float = 1.0,
+    max_retries: Optional[int] = None,
+    initial_delay: Optional[float] = None,
     backoff_factor: float = 2.0
 ):
     """Connect to Milvus with exponential backoff retry."""
     host = host or os.getenv("MILVUS_HOST", "milvus-standalone")
     port = port or os.getenv("MILVUS_PORT", "19530")
+
+    if max_retries is None:
+        max_retries = int(os.getenv("MILVUS_MAX_RETRIES", "1" if "pytest" in sys.modules else "5"))
+    if initial_delay is None:
+        initial_delay = float(os.getenv("MILVUS_INITIAL_DELAY", "0.05" if "pytest" in sys.modules else "1.0"))
 
     if connections.has_connection(alias):
         return

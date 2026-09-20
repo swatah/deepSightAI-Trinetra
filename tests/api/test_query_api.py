@@ -8,10 +8,6 @@ import os
 from unittest.mock import patch, MagicMock
 import torch
 
-# Add the current directory to the path so we can import SearchService
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-# Import the app directly from the SearchService module
 from SearchService.main import app
 
 client = TestClient(app)

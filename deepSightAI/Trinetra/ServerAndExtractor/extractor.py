@@ -2,7 +2,10 @@ import os
 import gi
 import uvicorn
 import httpx
-import ffmpeg
+try:
+    import ffmpeg
+except ImportError:
+    ffmpeg = None
 import sys
 import tempfile
 import time
@@ -23,9 +26,13 @@ from shared.config import get as get_config
 from shared.storage import configure_bucket_lifecycle
 
 # --- GStreamer and GObject Imports ---
-gi.require_version('Gst', '1.0')
-from gi.repository import Gst, GLib
-Gst.init(None)
+try:
+    gi.require_version('Gst', '1.0')
+    from gi.repository import Gst, GLib
+    Gst.init(None)
+except (ImportError, AttributeError, ValueError, Exception):
+    Gst = None
+    GLib = None
 
 # --- CONFIGURATION ---
 EXTRACTOR_ID = os.getenv("EXTRACTOR_ID", "default_extractor")
@@ -280,7 +287,7 @@ class GStreamerRtspExtractor:
             self.loop.quit()
 
 # --- FASTAPI REQUEST MODELS ---
-class FileJobRequest(BaseModel):
+class HttpFileRequest(BaseModel):
     video_uri: str
     segment_id: int
     start_time: float
@@ -288,10 +295,17 @@ class FileJobRequest(BaseModel):
     tenant_id: str = "default"
     camera_id: Optional[str] = None
 
-class RtspJobRequest(BaseModel):
+# Backward compatibility alias
+FileJobRequest = HttpFileRequest
+
+
+class HttpRtspRequest(BaseModel):
     rtsp_url: str
     tenant_id: str = "default"
     camera_id: Optional[str] = None
+
+# Backward compatibility alias
+RtspJobRequest = HttpRtspRequest
 
 # --- BACKGROUND JOB FUNCTIONS ---
 def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, duration: float,

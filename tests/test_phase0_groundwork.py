@@ -19,11 +19,11 @@ from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from shared.streaming.schema import FrameReadyEvent
-from shared.db import Base
-from shared.repositories.camera_repository import Camera, CameraRepository
-from shared.repositories.plate_repository import PlateRead, PlateRepository
-from shared.repositories.watchlist_repository import (
+from deepSightAI.Trinetra.Shared.streaming.schema import FrameReadyEvent
+from deepSightAI.Trinetra.Shared.db import Base
+from deepSightAI.Trinetra.Shared.repositories.camera_repository import Camera, CameraRepository
+from deepSightAI.Trinetra.Shared.repositories.plate_repository import PlateRead, PlateRepository
+from deepSightAI.Trinetra.Shared.repositories.watchlist_repository import (
     WatchlistEntry,
     Alert,
     WatchlistRepository,
@@ -248,6 +248,20 @@ class TestGW4GW5ExtractorRTSPAndBuckets:
         )
         assert rtsp_req.tenant_id == "tenant_beta"
         assert rtsp_req.camera_id == "cam_gate"
+
+        # Verify CamelCase HttpFileRequest and HttpRtspRequest models
+        from extractor import HttpFileRequest, HttpRtspRequest
+        from deepSightAI.Trinetra import HttpRtspRequest as DeepSightHttpRtspRequest
+
+        http_rtsp = HttpRtspRequest(
+            rtsp_url="rtsp://10.0.0.1:554/live",
+            tenant_id="tenant_beta",
+            camera_id="cam_gate"
+        )
+        assert http_rtsp.rtsp_url == "rtsp://10.0.0.1:554/live"
+        assert issubclass(RtspJobRequest, HttpRtspRequest) or RtspJobRequest == HttpRtspRequest
+        assert issubclass(FileJobRequest, HttpFileRequest) or FileJobRequest == HttpFileRequest
+        assert DeepSightHttpRtspRequest == HttpRtspRequest
 
 
 class TestGW6RegistryZombieReclaim:

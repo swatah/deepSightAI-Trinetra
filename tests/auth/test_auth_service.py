@@ -11,11 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
-# Import the app and models from AuthService
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "AuthService"))
-
-from auth_service import app, User, Base, get_db, create_access_token, pwd_context
+from AuthService.auth_service import app, User, Base, get_db, create_access_token, pwd_context
 
 # Use SQLite in-memory database for tests to avoid needing Postgres
 SQLITE_TEST_DB = "sqlite:////tmp/test_deepSightAI-Trinetra.db"

@@ -12,11 +12,20 @@ import threading
 
 import yaml
 
-_DEFAULT_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config",
-    "global_config.yaml",
-)
+def _find_default_config() -> str:
+    curr = os.path.abspath(__file__)
+    for _ in range(5):
+        curr = os.path.dirname(curr)
+        candidate = os.path.join(curr, "config", "global_config.yaml")
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "config",
+        "global_config.yaml",
+    )
+
+_DEFAULT_CONFIG_PATH = _find_default_config()
 
 _lock = threading.Lock()
 _cached_config = None
@@ -31,8 +40,12 @@ def load_config(force_reload: bool = False) -> dict:
     global _cached_config
     with _lock:
         if _cached_config is None or force_reload:
-            with open(_config_path()) as f:
-                _cached_config = yaml.safe_load(f) or {}
+            path = _config_path()
+            if os.path.exists(path):
+                with open(path) as f:
+                    _cached_config = yaml.safe_load(f) or {}
+            else:
+                _cached_config = {}
         return _cached_config
 
 

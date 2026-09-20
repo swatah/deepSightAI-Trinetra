@@ -18,10 +18,7 @@ from fastapi.testclient import TestClient
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "AuthService"))
-
-from auth_service import (
+from AuthService.auth_service import (
     app, User, Tenant, UserTenant, Role, UserRole,
     Base, get_db, create_access_token, decode_token
 )

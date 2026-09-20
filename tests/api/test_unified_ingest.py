@@ -12,11 +12,6 @@ from pathlib import Path
 from datetime import datetime
 import uuid
 
-# Add repo root and Server and Extractor directory to path
-repo_root = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(repo_root))
-sys.path.insert(0, str(repo_root / "Server and Extractor"))
-
 # We'll import the app after it's created
 from ingest_service import app, get_extractor, publish_event, get_job_id
 

@@ -13,11 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 from datetime import datetime, timedelta
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "AuthService"))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from auth_service import app, APIKey, Base, get_db
+from AuthService.auth_service import app, APIKey, Base, get_db
 from shared.middleware import set_jwt_public_key
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization

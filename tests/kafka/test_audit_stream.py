@@ -12,11 +12,6 @@ from pathlib import Path
 import os
 import sys
 
-# Add repo root to sys.path to import AuditService
-repo_root = Path(__file__).resolve().parent.parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-
 # Mock heavy dependencies
 sys.modules['psycopg2'] = MagicMock()
 sys.modules['psycopg2.extras'] = MagicMock()

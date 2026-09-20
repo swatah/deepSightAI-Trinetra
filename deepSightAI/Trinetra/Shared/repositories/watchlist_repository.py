@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 import json
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text
-from shared.db import Base
+from ..db import Base
 from .base import BaseRepository
 
 

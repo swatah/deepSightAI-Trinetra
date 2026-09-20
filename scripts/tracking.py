@@ -12,9 +12,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 TASK_STATE_DIR = Path(__file__).parent.parent / ".task_state"
 TASKS_DB = TASK_STATE_DIR / "tasks.json"
 HISTORY_LOG = TASK_STATE_DIR / "history.log"

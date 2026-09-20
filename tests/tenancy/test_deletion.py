@@ -11,10 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from pathlib import Path
 import sys
 
-# Add AuthService to path so we can import auth_service
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "AuthService"))
-
-from auth_service import app, get_db, require_auth, Base, Tenant, User, UserTenant, Role, UserRole, get_password_hash
+from AuthService.auth_service import app, get_db, require_auth, Base, Tenant, User, UserTenant, Role, UserRole, get_password_hash
 from shared.middleware import set_jwt_public_key
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization

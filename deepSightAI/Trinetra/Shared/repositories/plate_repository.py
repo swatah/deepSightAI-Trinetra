@@ -7,7 +7,7 @@ Stores and queries license plate detections within a tenant's schema.
 from datetime import datetime
 from typing import List, Optional
 from sqlalchemy import Column, Integer, String, Float, DateTime, text
-from shared.db import Base
+from ..db import Base
 from .base import BaseRepository
 
 

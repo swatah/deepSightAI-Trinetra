@@ -72,9 +72,7 @@ engine = create_engine(
 )
 
 # Import models from AuthService to create tables
-# Path setup: add parent dir to sys.path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'AuthService'))
-from auth_service import Base
+from AuthService.auth_service import Base
 
 # Create all tables in the tenant schema
 print(f"Creating tables in schema '{schema}'...")
