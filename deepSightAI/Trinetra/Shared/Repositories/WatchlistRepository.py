@@ -8,8 +8,8 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 import json
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text
-from ..db import Base
-from .base import BaseRepository
+from ..DB import Base
+from .Base import BaseRepository
 
 
 class WatchlistEntry(Base):

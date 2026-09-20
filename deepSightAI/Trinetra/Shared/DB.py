@@ -1,5 +1,5 @@
 """
-T1.3.2: Tenant-aware database connection
+T1.3.2: Tenant-aware database connection under deepSightAI.Trinetra.Shared.DB.
 
 Provides get_tenant_connection(tenant_id) which returns a SQLAlchemy
 engine configured to use the specified tenant's schema via search_path.
@@ -48,7 +48,7 @@ def get_tenant_connection(tenant_id: str):
     if not isinstance(tenant_id, str):
         tenant_id = str(tenant_id)
     # Simple sanitization - in production use stricter validation
-    safe_tenant_id = "".join(c for c in tenant_id if c.isalnum() or c in "-_")
+    safe_tenant_id = "".join(c for c in tenant_id if c.isalnum() or c == "_")
 
     # Build connection string with search_path option
     # The 'options' parameter sets command-line options for psql connection
@@ -126,10 +126,9 @@ def init_tenant_schema(tenant_id: str):
     """
     if not isinstance(tenant_id, str):
         tenant_id = str(tenant_id)
-    safe_tenant_id = "".join(c for c in tenant_id if c.isalnum() or c in "-_")
+    safe_tenant_id = "".join(c for c in tenant_id if c.isalnum() or c == "_")
     engine = get_tenant_connection(tenant_id)
     with engine.connect() as conn:
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "tenant_{safe_tenant_id}"'))
         conn.commit()
     Base.metadata.create_all(bind=engine)
-

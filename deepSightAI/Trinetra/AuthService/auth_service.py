@@ -34,7 +34,7 @@ from cryptography.hazmat.primitives import serialization
 # AUTH DEPENDENCY
 # ============================================================================
 try:
-    from shared.middleware import require_auth
+    from deepSightAI.Trinetra.Shared.Middleware import require_auth
     AUTH_AVAILABLE = True
 except ImportError:
     AUTH_AVAILABLE = False
@@ -860,7 +860,7 @@ def _cleanup_redis(tenant_id: int):
     """Delete all Redis keys with tenant prefix."""
     try:
         from redis import Redis
-        from shared.redis_utils import make_tenant_prefix
+        from deepSightAI.Trinetra.Shared.RedisUtils import make_tenant_prefix
         # Connect to Redis (use env var)
         redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
         r = Redis.from_url(redis_url, decode_responses=True)
@@ -907,7 +907,7 @@ def _cleanup_minio(tenant_id: int):
 def _cleanup_milvus(tenant_id: int):
     """Drop tenant's Milvus collection."""
     try:
-        from shared.milvus import drop_tenant_collection
+        from deepSightAI.Trinetra.Shared.Milvus import drop_tenant_collection
         drop_tenant_collection(str(tenant_id))
     except Exception as e:
         print(f"[TenantDeletion] Milvus cleanup error: {e}")

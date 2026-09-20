@@ -6,14 +6,17 @@ WORKDIR /workspace
 ENV DATABASE_URL=sqlite:///test.db
 
 # Copy requirements and install dependencies
-COPY AuthService/requirements.txt /workspace/
+COPY deepSightAI/Trinetra/AuthService/requirements.txt /workspace/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt pytest
 
-# Copy source - keep AuthService as a subdirectory
-COPY AuthService /workspace/AuthService
-# Copy shared package
-COPY shared /workspace/shared
-# Copy all tests (including middleware)
+# Copy package configuration, deepSightAI package hierarchy, config, and tests
+COPY setup.py pyproject.toml /workspace/
+COPY deepSightAI /workspace/deepSightAI
+COPY config /workspace/config
 COPY tests /workspace/tests
+
+# Install deepSightAI package natively
+RUN pip install --no-deps -e .
+
 
 CMD ["pytest", "tests/auth/", "tests/middleware/", "-v"]

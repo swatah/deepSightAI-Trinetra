@@ -25,4 +25,6 @@ venv/
   IDE
 .vscode/
 .idea/
-
+*.egg-info/
+build/
+dist/

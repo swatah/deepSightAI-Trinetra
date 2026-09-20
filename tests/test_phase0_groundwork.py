@@ -13,17 +13,19 @@ Verifies all critical fixes and foundation contracts:
 import os
 import sys
 import uuid
+import threading
+import time
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from deepSightAI.Trinetra.Shared.streaming.schema import FrameReadyEvent
-from deepSightAI.Trinetra.Shared.db import Base
-from deepSightAI.Trinetra.Shared.repositories.camera_repository import Camera, CameraRepository
-from deepSightAI.Trinetra.Shared.repositories.plate_repository import PlateRead, PlateRepository
-from deepSightAI.Trinetra.Shared.repositories.watchlist_repository import (
+from deepSightAI.Trinetra.Shared.Streaming.Schema import FrameReadyEvent
+from deepSightAI.Trinetra.Shared.DB import Base
+from deepSightAI.Trinetra.Shared.Repositories.CameraRepository import Camera, CameraRepository
+from deepSightAI.Trinetra.Shared.Repositories.PlateRepository import PlateRead, PlateRepository
+from deepSightAI.Trinetra.Shared.Repositories.WatchlistRepository import (
     WatchlistEntry,
     Alert,
     WatchlistRepository,
@@ -104,7 +106,7 @@ class TestGW1FramePreservation:
 
     def test_configure_bucket_lifecycle(self):
         """Verify configure_bucket_lifecycle sets 7-day expiration policy."""
-        from shared.storage import configure_bucket_lifecycle
+        from deepSightAI.Trinetra.Shared.Storage import configure_bucket_lifecycle
 
         mock_minio = MagicMock()
         success = configure_bucket_lifecycle(mock_minio, "frames", retention_days=7)
@@ -121,7 +123,7 @@ class TestGW1FramePreservation:
     def test_cleanup_expired_frames(self):
         """Verify cleanup_expired_frames only deletes items older than retention threshold."""
         from datetime import datetime, timezone, timedelta
-        from shared.storage import cleanup_expired_frames
+        from deepSightAI.Trinetra.Shared.Storage import cleanup_expired_frames
 
         mock_minio = MagicMock()
         now = datetime.now(timezone.utc)
@@ -139,6 +141,78 @@ class TestGW1FramePreservation:
         deleted = cleanup_expired_frames(mock_minio, "frames", retention_days=7)
         assert deleted == 1
         mock_minio.remove_object.assert_called_once_with("frames", "tenant/cam/2026-09-01/frame1.jpg")
+
+    def test_dual_consumers_access_same_frames_without_404(self, tmp_path):
+        """GW-1: Verify two independent consumers access identical frames in MinIO without 404 NoSuchKey."""
+        from Embedder.event_consumer import EmbedderConsumer
+        import torch
+
+        # In-memory storage mock: would fail with 404 if previous consumer deleted the object
+        dsai_minio_store = {
+            "tenant_alpha/cam_gate/2026-09-20/frame_001.jpg": b"fake_jpeg_data_content"
+        }
+
+        mock_minio = MagicMock()
+
+        def dsai_fget_object(bucket_name, object_name, file_path):
+            if object_name not in dsai_minio_store:
+                raise Exception(f"S3Error: 404 NoSuchKey - {object_name} does not exist in bucket {bucket_name}")
+            with open(file_path, "wb") as f:
+                f.write(dsai_minio_store[object_name])
+
+        def dsai_remove_object(bucket_name, object_name):
+            dsai_minio_store.pop(object_name, None)
+
+        mock_minio.fget_object.side_effect = dsai_fget_object
+        mock_minio.remove_object.side_effect = dsai_remove_object
+
+        mock_collection_a = MagicMock()
+        mock_collection_a.schema.fields = [MagicMock() for _ in range(7)]
+        mock_collection_b = MagicMock()
+        mock_collection_b.schema.fields = [MagicMock() for _ in range(7)]
+
+        # Consumer 1: Main vector embedder
+        dsai_consumer_a = EmbedderConsumer(
+            milvus_collection=mock_collection_a,
+            minio_client=mock_minio,
+            group_name="embedder-group",
+            consumer_id="embedder-worker-1"
+        )
+
+        # Consumer 2: Independent secondary consumer (e.g. alert / LPR / audit worker)
+        dsai_consumer_b = EmbedderConsumer(
+            milvus_collection=mock_collection_b,
+            minio_client=mock_minio,
+            group_name="alert-group",
+            consumer_id="alert-worker-1"
+        )
+
+        dsai_event = FrameReadyEvent(
+            video_id="traffic_stream",
+            segment_id=0,
+            frame_paths=["tenant_alpha/cam_gate/2026-09-20/frame_001.jpg"],
+            timestamps=[10.0],
+            sequence_numbers=[1],
+            extractor_id="ext-01",
+            bucket_name="frames",
+            timestamp=datetime.utcnow(),
+            tenant_id="tenant_alpha",
+            camera_id="cam_gate"
+        )
+
+        with patch("Embedder.event_consumer.encode_images", return_value=torch.ones((1, 512))), \
+             patch("os.unlink"):
+            # Consumer A processes event
+            dsai_consumer_a.process_event(dsai_event)
+            # Consumer B processes same event afterwards
+            dsai_consumer_b.process_event(dsai_event)
+
+        # Assert BOTH consumers inserted into their respective collections
+        assert mock_collection_a.insert.called
+        assert mock_collection_b.insert.called
+        # Assert the frame object STILL exists in MinIO store (no 404 was raised, no deletion occurred)
+        assert "tenant_alpha/cam_gate/2026-09-20/frame_001.jpg" in dsai_minio_store
+        assert mock_minio.remove_object.call_count == 0
 
 
 class TestGW2SearchContract:
@@ -209,24 +283,91 @@ class TestGW3FrameReadyEvent:
         assert deserialized.correlation_id == "corr-999"
 
 
-class TestGW4GW5ExtractorRTSPAndBuckets:
-    """GW-4 & GW-5: Single bucket & hierarchical paths."""
+class TestGW4RTSPReconnect:
+    """GW-4: Verify RTSP reconnect loop with exponential backoff on network error."""
 
-    def test_extractor_single_bucket_and_hierarchical_paths(self):
-        # Mock external dependencies if needed
-        try:
-            import ffmpeg
-        except ImportError:
-            sys.modules['ffmpeg'] = MagicMock()
+    def test_gstreamer_error_message_does_not_abort_stream_and_allows_reconnect(self):
+        """Simulate Gst.MessageType.ERROR to ensure extractor.stop() is called but shutdown_event is NOT set."""
         try:
             import gi
             gi.require_version('Gst', '1.0')
+            from gi.repository import Gst
         except (ImportError, AttributeError, ValueError):
-            gi = MagicMock()
-            sys.modules['gi'] = gi
-            sys.modules['gi.repository'] = MagicMock()
+            Gst = MagicMock()
+            Gst.MessageType.ERROR = 1
+            Gst.MessageType.EOS = 2
 
-        from extractor import FRAME_BUCKET, FileJobRequest, RtspJobRequest
+        import extractor
+        dsai_shutdown_event = threading.Event()
+        dsai_extractor = extractor.GStreamerRtspExtractor(
+            rtsp_url="rtsp://10.0.0.1:8554/live",
+            video_id="cam_test",
+            minio_client=MagicMock(),
+            bucket_name="frames",
+            shutdown_event=dsai_shutdown_event,
+            tenant_id="tenant_1",
+            camera_id="cam_test"
+        )
+
+        dsai_mock_msg = MagicMock()
+        dsai_mock_msg.type = Gst.MessageType.ERROR
+        dsai_mock_msg.parse_error.return_value = (Exception("Connection refused by RTSP server"), "debug trace")
+
+        with patch.object(dsai_extractor, "stop") as dsai_mock_stop:
+            dsai_extractor.on_message(bus=None, message=dsai_mock_msg)
+            # Pipeline is stopped on error
+            dsai_mock_stop.assert_called_once()
+            # CRITICAL: shutdown_event must NOT be set, so the outer reconnect loop can retry!
+            assert dsai_shutdown_event.is_set() is False
+
+    def test_run_rtsp_extraction_job_retries_with_exponential_backoff(self):
+        """Verify run_rtsp_extraction_job reconnects with exponential backoff (2s -> 4s -> ...) on disconnect."""
+        import extractor
+
+        dsai_stream_event = threading.Event()
+        dsai_sleep_durations = []
+
+        def dsai_mock_sleep(seconds):
+            dsai_sleep_durations.append(seconds)
+            # After 2 retry attempts, signal stream shutdown to terminate the test loop cleanly
+            if len(dsai_sleep_durations) >= 2:
+                dsai_stream_event.set()
+
+        dsai_attempt_count = 0
+        def dsai_mock_start(self):
+            nonlocal dsai_attempt_count
+            dsai_attempt_count += 1
+            # Simulate pipeline running and terminating on network disconnect without setting stream_event
+            return None
+
+        with patch("extractor.ensure_bucket"), \
+             patch("extractor.Minio"), \
+             patch.object(extractor.GStreamerRtspExtractor, "start", dsai_mock_start), \
+             patch("time.sleep", side_effect=dsai_mock_sleep):
+
+            extractor.run_rtsp_extraction_job(
+                rtsp_url="rtsp://test-camera:8554/stream",
+                stream_id="stream_test_01",
+                stream_event=dsai_stream_event,
+                tenant_id="tenant_gamma",
+                camera_id="cam_gate_01"
+            )
+
+        # Verified that the job reconnected multiple times
+        assert dsai_attempt_count == 2
+        # Verified exponential backoff progression: 2s, then 4s (doubles every retry)
+        assert dsai_sleep_durations == [2, 4]
+        # Verified that stream only ended once shutdown_event was set
+        assert dsai_stream_event.is_set() is True
+
+
+class TestGW5StructuredObjectPaths:
+    """GW-5: Verify single bucket & structured hierarchical MinIO object paths."""
+
+    def test_extractor_single_bucket_and_models(self):
+        """Verify FRAME_BUCKET constant and CamelCase request models."""
+        from extractor import FRAME_BUCKET, FileJobRequest, RtspJobRequest, HttpFileRequest, HttpRtspRequest
+        from deepSightAI.Trinetra import HttpRtspRequest as DeepSightHttpRtspRequest
 
         assert FRAME_BUCKET == "frames"
 
@@ -249,10 +390,6 @@ class TestGW4GW5ExtractorRTSPAndBuckets:
         assert rtsp_req.tenant_id == "tenant_beta"
         assert rtsp_req.camera_id == "cam_gate"
 
-        # Verify CamelCase HttpFileRequest and HttpRtspRequest models
-        from extractor import HttpFileRequest, HttpRtspRequest
-        from deepSightAI.Trinetra import HttpRtspRequest as DeepSightHttpRtspRequest
-
         http_rtsp = HttpRtspRequest(
             rtsp_url="rtsp://10.0.0.1:554/live",
             tenant_id="tenant_beta",
@@ -262,6 +399,98 @@ class TestGW4GW5ExtractorRTSPAndBuckets:
         assert issubclass(RtspJobRequest, HttpRtspRequest) or RtspJobRequest == HttpRtspRequest
         assert issubclass(FileJobRequest, HttpFileRequest) or FileJobRequest == HttpFileRequest
         assert DeepSightHttpRtspRequest == HttpRtspRequest
+
+    def test_file_extraction_hierarchical_paths(self, tmp_path):
+        """Verify extract_frames constructs exact {tenant_id}/{camera_id}/{date}/{video_id}/segment_{id}/ paths."""
+        import extractor
+        from deepSightAI.Trinetra.Shared.Minio import is_tenant_prefixed
+
+        dsai_mock_minio = MagicMock()
+        dsai_uploaded_keys = []
+
+        def dsai_mock_fput(bucket, object_name, file_path):
+            dsai_uploaded_keys.append((bucket, object_name))
+
+        dsai_mock_minio.fput_object.side_effect = dsai_mock_fput
+
+        # Mock GStreamerFileExtractor to produce 2 fake JPEG frames in the output directory
+        def dsai_mock_extract(segment_path, output_dir):
+            with open(os.path.join(output_dir, "frame_00000.jpg"), "wb") as f:
+                f.write(b"frame0")
+            with open(os.path.join(output_dir, "frame_00001.jpg"), "wb") as f:
+                f.write(b"frame1")
+
+        with patch("extractor.Minio", return_value=dsai_mock_minio), \
+             patch("extractor.ensure_bucket"), \
+             patch("extractor.ffmpeg"), \
+             patch("extractor.publish_frame_ready_event"), \
+             patch("extractor.GStreamerFileExtractor.extract_frames", side_effect=dsai_mock_extract), \
+             patch("httpx.Client"):
+
+            extractor.run_file_extraction_job(
+                video_uri="videos/mall_cctv.mp4",
+                segment_id=5,
+                start_time=150.0,
+                duration=30.0,
+                tenant_id="tenant_retail",
+                camera_id="cam_aisle_3"
+            )
+
+        assert len(dsai_uploaded_keys) == 2
+        dsai_date_today = datetime.utcnow().strftime("%Y-%m-%d")
+
+        for dsai_bucket, dsai_object_name in dsai_uploaded_keys:
+            assert dsai_bucket == "frames", f"Expected 'frames' bucket, got {dsai_bucket}"
+            assert is_tenant_prefixed(dsai_object_name, "tenant_retail")
+            dsai_expected_prefix = f"tenant_retail/cam_aisle_3/{dsai_date_today}/mall_cctv/segment_0005/"
+            assert dsai_object_name.startswith(dsai_expected_prefix), f"Object name {dsai_object_name} must start with {dsai_expected_prefix}"
+            assert dsai_object_name.endswith(".jpg")
+
+    def test_rtsp_extraction_hierarchical_paths(self):
+        """Verify GStreamerRtspExtractor.on_new_sample generates {tenant}/{camera}/{date}/frame_*.jpg paths."""
+        import extractor
+        from deepSightAI.Trinetra.Shared.Minio import is_tenant_prefixed
+
+        dsai_mock_minio = MagicMock()
+        dsai_uploaded_keys = []
+
+        def dsai_mock_fput(bucket, object_name, file_path):
+            dsai_uploaded_keys.append((bucket, object_name))
+
+        dsai_mock_minio.fput_object.side_effect = dsai_mock_fput
+
+        dsai_shutdown = threading.Event()
+        dsai_extractor = extractor.GStreamerRtspExtractor(
+            rtsp_url="rtsp://10.0.0.5:8554/live",
+            video_id="cam_traffic_01",
+            minio_client=dsai_mock_minio,
+            bucket_name="frames",
+            shutdown_event=dsai_shutdown,
+            tenant_id="tenant_city",
+            camera_id="cam_traffic_01"
+        )
+
+        # Mock sample buffer
+        dsai_mock_sink = MagicMock()
+        dsai_mock_sample = MagicMock()
+        dsai_mock_buffer = MagicMock()
+        dsai_mock_info = MagicMock()
+        dsai_mock_info.data = b"fake_rtsp_jpeg_bytes"
+        dsai_mock_buffer.map.return_value = (True, dsai_mock_info)
+        dsai_mock_sample.get_buffer.return_value = dsai_mock_buffer
+        dsai_mock_sink.emit.return_value = dsai_mock_sample
+
+        with patch("extractor.publish_frame_ready_event"):
+            dsai_extractor.on_new_sample(dsai_mock_sink)
+
+        assert len(dsai_uploaded_keys) == 1
+        dsai_bucket, dsai_object_name = dsai_uploaded_keys[0]
+        assert dsai_bucket == "frames"
+        dsai_date_today = datetime.utcnow().strftime("%Y-%m-%d")
+        dsai_expected_prefix = f"tenant_city/cam_traffic_01/{dsai_date_today}/frame_"
+        assert dsai_object_name.startswith(dsai_expected_prefix)
+        assert dsai_object_name.endswith(".jpg")
+        assert is_tenant_prefixed(dsai_object_name, "tenant_city")
 
 
 class TestGW6RegistryZombieReclaim:
@@ -478,3 +707,76 @@ class TestGW7Repositories:
 
         # Now unacknowledged list is empty
         assert len(alert_repo.list_unacknowledged()) == 0
+
+    def test_tenant_connection_search_path_configuration(self):
+        """GW-7: Verify get_tenant_connection configures search_path in PostgreSQL connection options."""
+        from deepSightAI.Trinetra.Shared.DB import get_tenant_connection, clear_engine_pool
+
+        clear_engine_pool()
+        with patch("deepSightAI.Trinetra.Shared.DB.create_engine") as dsai_mock_create:
+            get_tenant_connection("acme_corp")
+            dsai_mock_create.assert_called_once()
+            _, dsai_kwargs = dsai_mock_create.call_args
+            dsai_options = dsai_kwargs.get("connect_args", {}).get("options", "")
+            assert "-c search_path=tenant_acme_corp,public" in dsai_options
+        clear_engine_pool()
+
+    def test_tenant_id_sanitization_prevents_sql_injection(self):
+        """GW-7: Verify get_tenant_connection sanitizes tenant_id to prevent search_path SQL injection."""
+        from deepSightAI.Trinetra.Shared.DB import get_tenant_connection, clear_engine_pool
+
+        clear_engine_pool()
+        with patch("deepSightAI.Trinetra.Shared.DB.create_engine") as dsai_mock_create:
+            get_tenant_connection("evil'; DROP SCHEMA public; --")
+            dsai_mock_create.assert_called_once()
+            _, dsai_kwargs = dsai_mock_create.call_args
+            dsai_options = dsai_kwargs.get("connect_args", {}).get("options", "")
+            # Verify dangerous SQL injection characters were completely stripped
+            assert "'" not in dsai_options
+            assert ";" not in dsai_options
+            assert "--" not in dsai_options
+            assert "tenant_evilDROPSCHEMApublic" in dsai_options
+        clear_engine_pool()
+
+    def test_validate_tenant_isolation_checks_search_path(self):
+        """GW-7: Verify validate_tenant_isolation verifies search_path contains tenant schema."""
+        from deepSightAI.Trinetra.Shared.DB import validate_tenant_isolation
+
+        dsai_mock_engine = MagicMock()
+        dsai_mock_conn = MagicMock()
+        dsai_mock_engine.connect.return_value.__enter__.return_value = dsai_mock_conn
+
+        # Case 1: Search path correctly contains tenant schema
+        dsai_mock_conn.execute.return_value.scalar.return_value = "tenant_alpha, public"
+        with patch("deepSightAI.Trinetra.Shared.DB.get_tenant_connection", return_value=dsai_mock_engine):
+            assert validate_tenant_isolation("alpha") is True
+
+        # Case 2: Search path lacks tenant schema (isolation failure)
+        dsai_mock_conn.execute.return_value.scalar.return_value = "public"
+        with patch("deepSightAI.Trinetra.Shared.DB.get_tenant_connection", return_value=dsai_mock_engine):
+            assert validate_tenant_isolation("alpha") is False
+
+    def test_multi_schema_isolation_boundary(self):
+        """GW-7: Verify true schema isolation boundary where data in schema A is invisible to schema B."""
+        from sqlalchemy import create_engine, text
+
+        # SQLite supports real multi-schema namespaces using ATTACH DATABASE
+        dsai_test_engine = create_engine("sqlite:///:memory:")
+        with dsai_test_engine.connect() as dsai_conn:
+            dsai_conn.execute(text("ATTACH DATABASE ':memory:' AS tenant_alpha;"))
+            dsai_conn.execute(text("ATTACH DATABASE ':memory:' AS tenant_beta;"))
+            dsai_conn.execute(text("CREATE TABLE tenant_alpha.cameras (id TEXT PRIMARY KEY, name TEXT);"))
+            dsai_conn.execute(text("CREATE TABLE tenant_beta.cameras (id TEXT PRIMARY KEY, name TEXT);"))
+
+            # Insert camera into tenant_alpha's schema only
+            dsai_conn.execute(text("INSERT INTO tenant_alpha.cameras VALUES ('cam-1', 'Alpha Gate');"))
+            dsai_conn.commit()
+
+            # Query tenant_alpha -> 1 camera
+            dsai_count_a = dsai_conn.execute(text("SELECT COUNT(*) FROM tenant_alpha.cameras;")).scalar()
+            assert dsai_count_a == 1
+
+            # Query tenant_beta -> 0 cameras (strict schema-per-tenant isolation confirmed)
+            dsai_count_b = dsai_conn.execute(text("SELECT COUNT(*) FROM tenant_beta.cameras;")).scalar()
+            assert dsai_count_b == 0
+

@@ -22,8 +22,8 @@ services:
 
   registry:
     build:
-      context: ..
-      dockerfile: "Server and Extractor/Dockerfile"
+      context: ../../..
+      dockerfile: deepSightAI/Trinetra/ServerAndExtractor/Dockerfile
     command: uvicorn registry:app --host 0.0.0.0 --port 8000
     restart: always
     environment: { REDIS_URL: "redis://redis:6379" }
@@ -33,8 +33,8 @@ services:
 
   input-router:
     build:
-      context: ..
-      dockerfile: "Server and Extractor/Dockerfile"
+      context: ../../..
+      dockerfile: deepSightAI/Trinetra/ServerAndExtractor/Dockerfile
     command: uvicorn main_api:app --host 0.0.0.0 --port 8080
     restart: always
     ports: [ "8080:8080" ]
@@ -43,8 +43,8 @@ services:
 
   extractor-1: &extractor-template
     build:
-      context: ..
-      dockerfile: "Server and Extractor/Dockerfile"
+      context: ../../..
+      dockerfile: deepSightAI/Trinetra/ServerAndExtractor/Dockerfile
     command: uvicorn extractor:app --host 0.0.0.0 --port 8001
     restart: always
     environment:

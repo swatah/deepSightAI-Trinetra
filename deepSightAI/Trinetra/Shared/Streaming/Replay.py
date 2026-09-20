@@ -5,9 +5,9 @@ Provides functionality to read past events from Redis Stream and republish them
 to trigger re-processing (e.g., for error recovery or data correction).
 """
 
-from .redis_client import create_redis_client
-from .producer import StreamProducer
-from .schema import FrameReadyEvent
+from .RedisClient import create_redis_client
+from .Producer import StreamProducer
+from .Schema import FrameReadyEvent
 
 
 class ReplayService:
@@ -43,33 +43,26 @@ class ReplayService:
         
         Returns:
             Number of events replayed
-        
-        Note:
-            Only events with matching video_id are republished.
-            Invalid/corrupted events are skipped with a warning.
         """
-        # XRANGE from start to end (all historical events)
-        events = self.client.xrange(stream, start="-", end="+")
+        try:
+            events = self.client.xrange(stream, "-", "+")
+        except TypeError:
+            events = self.client.xrange(name=stream, min="-", max="+")
         replayed = 0
         
         for msg_id, data in events:
             try:
-                # Parse event JSON
                 event_json = data.get("event")
                 if not event_json:
                     continue
                 
                 event = FrameReadyEvent.model_validate_json(event_json)
                 
-                # Filter by video_id
                 if event.video_id == video_id:
-                    # Republishes the same event to trigger processing
                     self.producer.publish(stream, event)
                     replayed += 1
                     
             except Exception as e:
-                # Log warning but continue with other events
-                # (print is okay for library code; real code would use logging)
                 print(f"Warning: skipping msg {msg_id}: {e}")
                 continue
         

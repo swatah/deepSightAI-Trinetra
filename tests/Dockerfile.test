@@ -24,25 +24,23 @@ RUN apt-get update && apt-get install -y kubectl && \
 # Install Helm via official script
 RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-# Note: k3d binary may not be installed (tests will skip if not present)
-# kustomize is not needed - we use kubectl kustomize which is built-in
-
-# Install Helm (moved after Docker to ensure it's available)
-RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-
 # Set working directory
 WORKDIR /workspace
 
-# Copy requirements first (cache layer)
-COPY Embedder/requirements_embedder.txt /workspace/requirements_embedder.txt
-COPY ["Server and Extractor/requirements.txt", "/workspace/requirements.txt"]
-COPY UI/requirements_ui.txt /workspace/requirements_ui.txt
-COPY AuthService/requirements.txt /workspace/requirements_auth.txt
+# Copy requirements from canonical paths first (cache layer)
+COPY deepSightAI/Trinetra/Embedder/requirements_embedder.txt /workspace/requirements_embedder.txt
+COPY deepSightAI/Trinetra/ServerAndExtractor/requirements.txt /workspace/requirements.txt
+COPY deepSightAI/Trinetra/UI/requirements_ui.txt /workspace/requirements_ui.txt
+COPY deepSightAI/Trinetra/AuthService/requirements.txt /workspace/requirements_auth.txt
 RUN pip install --no-cache-dir -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt -r requirements_auth.txt \
     && pip install --no-cache-dir pytest pytest-cov pytest-xdist pyyaml
 
 # Copy source code
 COPY . .
+
+# Install deepSightAI package natively
+RUN pip install --no-deps -e .
+
 
 # Default command - can be overridden
 CMD ["pytest", "tests/unit/", "-v"]

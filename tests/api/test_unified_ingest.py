@@ -175,7 +175,7 @@ class TestEventPublishing:
 
     def test_ingest_job_started_event_structure(self):
         """Verify IngestJobStarted event has required fields."""
-        from shared.streaming.schema import IngestJobStarted
+        from deepSightAI.Trinetra.Shared.Streaming.Schema import IngestJobStarted
 
         event = IngestJobStarted(
             job_id="test-job",

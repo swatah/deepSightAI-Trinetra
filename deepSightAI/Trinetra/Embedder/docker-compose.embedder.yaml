@@ -49,8 +49,8 @@ services:
     # Build context is the repo root so the Dockerfile can COPY shared/ and
     # config/ (both live outside Embedder/) alongside the embedder's own files.
     build:
-      context: ..
-      dockerfile: Embedder/Dockerfile
+      context: ../../..
+      dockerfile: deepSightAI/Trinetra/Embedder/Dockerfile
     # Always restart the container if it stops, for resilience.
     restart: always
     # Wait for Milvus to be healthy before starting

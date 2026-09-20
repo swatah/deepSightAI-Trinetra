@@ -20,10 +20,10 @@ from minio import Minio
 from minio.error import S3Error
 import signal
 import threading
-from shared.streaming.producer import StreamProducer
-from shared.streaming.schema import FrameReadyEvent
-from shared.config import get as get_config
-from shared.storage import configure_bucket_lifecycle
+from deepSightAI.Trinetra.Shared.Streaming.Producer import StreamProducer
+from deepSightAI.Trinetra.Shared.Streaming.Schema import FrameReadyEvent
+from deepSightAI.Trinetra.Shared.Config import get as get_config
+from deepSightAI.Trinetra.Shared.Storage import configure_bucket_lifecycle
 
 # --- GStreamer and GObject Imports ---
 try:
@@ -420,7 +420,7 @@ def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threadi
 # --- FASTAPI APPLICATION SETUP ---
 # --- AUTH DEPENDENCY ---
 try:
-    from shared.middleware import require_auth
+    from deepSightAI.Trinetra.Shared.Middleware import require_auth
     AUTH_AVAILABLE = True
 except ImportError:
     AUTH_AVAILABLE = False

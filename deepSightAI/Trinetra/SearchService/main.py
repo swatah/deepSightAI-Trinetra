@@ -76,7 +76,7 @@ if not USE_ONNX or not os.path.exists(ONNX_MODEL_PATH):
         except Exception as e:
             logger.warning(f"Could not load online OpenCLIP model (offline/sandbox): {e}")
 
-from shared.milvus import ensure_tenant_collection, connect_milvus_with_retry, get_collection_name
+from deepSightAI.Trinetra.Shared.Milvus import ensure_tenant_collection, connect_milvus_with_retry, get_collection_name
 
 def get_milvus_collection(tenant_id: str = "default") -> Collection:
     """Connect to Milvus and return tenant collection."""

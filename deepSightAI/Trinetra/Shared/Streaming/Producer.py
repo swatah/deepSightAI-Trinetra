@@ -5,7 +5,7 @@ Provides StreamProducer class to publish Pydantic events to Redis Streams with
 configurable max length for backpressure.
 """
 
-from .redis_client import create_redis_client
+from .RedisClient import create_redis_client
 
 
 class StreamProducer:

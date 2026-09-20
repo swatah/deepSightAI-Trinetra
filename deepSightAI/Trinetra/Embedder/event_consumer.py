@@ -10,8 +10,8 @@ import tempfile
 import os
 import json
 from typing import List
-from shared.streaming.consumer import StreamConsumer
-from shared.streaming.schema import FrameReadyEvent
+from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer
+from deepSightAI.Trinetra.Shared.Streaming.Schema import FrameReadyEvent
 
 # We'll import these from embedder.py when running in production
 # They initialize heavy model on import
@@ -19,7 +19,10 @@ try:
     try:
         from embedder import encode_images, get_minio_client, get_milvus_collection, FRAME_BUCKET, register_with_registry, update_embedder_status
     except ImportError:
-        from Embedder.embedder import encode_images, get_minio_client, get_milvus_collection, FRAME_BUCKET, register_with_registry, update_embedder_status
+        try:
+            from deepSightAI.Trinetra.Embedder.embedder import encode_images, get_minio_client, get_milvus_collection, FRAME_BUCKET, register_with_registry, update_embedder_status
+        except ImportError:
+            from Embedder.embedder import encode_images, get_minio_client, get_milvus_collection, FRAME_BUCKET, register_with_registry, update_embedder_status
     EMBEDDER_MODULE_AVAILABLE = True
 except Exception as e:
     # During testing, mocks will be provided

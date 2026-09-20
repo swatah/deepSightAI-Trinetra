@@ -163,7 +163,7 @@ class TestAPIKeyGeneration:
                 headers={"Authorization": f"Bearer {token}"},
                 json={"name": f"Key {i}"}
             )
-            assert resp.status_code == 200
+            assert resp.status_code == 200, f"Error: {resp.status_code} {resp.text}"
             prefixes.append(resp.json()["prefix"])
         assert len(set(prefixes)) == 3
 
@@ -195,7 +195,7 @@ class TestAPIKeyGeneration:
             headers={"Authorization": f"Bearer {token}"},
             json={"name": "Expiring Key", "expires_in_days": 7}
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, f"Error: {response.status_code} {response.text}"
         expires_at_str = response.json()["expires_at"]
         expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
         diff = expires_at - now

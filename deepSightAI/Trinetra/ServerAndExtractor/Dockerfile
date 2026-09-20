@@ -19,12 +19,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY ["Server and Extractor/requirements.txt", "./"]
+# Copy requirements from canonical path
+COPY deepSightAI/Trinetra/ServerAndExtractor/requirements.txt ./
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ["Server and Extractor/", "./"]
-COPY shared/ ./shared/
+# Copy service files
+COPY deepSightAI/Trinetra/ServerAndExtractor/ ./
+
+# Copy package configuration, deepSightAI package hierarchy, and global config
+COPY setup.py pyproject.toml ./
+COPY deepSightAI/ ./deepSightAI/
 COPY config/ ./config/
 
-ENV PYTHONPATH=/app
+# Install deepSightAI package natively
+RUN pip install --no-deps -e .

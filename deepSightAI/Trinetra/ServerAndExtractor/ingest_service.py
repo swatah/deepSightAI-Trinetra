@@ -11,8 +11,8 @@ from typing import Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse
 import httpx
-from shared.streaming.producer import StreamProducer
-from shared.streaming.schema import IngestJobStarted
+from deepSightAI.Trinetra.Shared.Streaming.Producer import StreamProducer
+from deepSightAI.Trinetra.Shared.Streaming.Schema import IngestJobStarted
 from datetime import datetime
 
 

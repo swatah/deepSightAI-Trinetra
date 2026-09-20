@@ -25,10 +25,10 @@ from pymilvus import (
 )
 
 # Import streaming components
-from shared.streaming.consumer import StreamConsumer
-from shared.streaming.schema import FrameReadyEvent
-from shared.config import get as get_config
-from shared.milvus import ensure_tenant_collection, connect_milvus_with_retry
+from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer
+from deepSightAI.Trinetra.Shared.Streaming.Schema import FrameReadyEvent
+from deepSightAI.Trinetra.Shared.Config import get as get_config
+from deepSightAI.Trinetra.Shared.Milvus import ensure_tenant_collection, connect_milvus_with_retry
 
 #Milvus variables
 MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-standalone")

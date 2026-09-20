@@ -7,8 +7,8 @@ Stores and retrieves camera records within a tenant's schema.
 from datetime import datetime
 from typing import List, Optional
 from sqlalchemy import Column, String, DateTime, Boolean
-from ..db import Base
-from .base import BaseRepository
+from ..DB import Base
+from .Base import BaseRepository
 
 
 class Camera(Base):

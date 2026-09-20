@@ -6,7 +6,7 @@ Provides StreamConsumer for reliable message consumption with acknowledgement.
 
 import uuid
 import redis
-from .redis_client import create_redis_client
+from .RedisClient import create_redis_client
 
 
 class Message:
@@ -42,13 +42,19 @@ class StreamConsumer:
         """
         try:
             # Create consumer group with last ID '$' (only new messages)
-            self.client.xgroup_create(name=stream_name, groupname=self.group_name, id='$', mkstream=True)
+            self.client.xgroup_create(stream=stream_name, groupname=self.group_name, id='$', mkstream=True)
+        except TypeError:
+            try:
+                self.client.xgroup_create(name=stream_name, groupname=self.group_name, id='$', mkstream=True)
+            except Exception as e:
+                error_msg = str(e).lower()
+                if 'busygroup' in error_msg or 'group already exists' in error_msg:
+                    return
+                raise
         except Exception as e:
-            # redis-py raises ResponseError for BUSYGROUP
-            # Check both the exception message and class name
             error_msg = str(e).lower()
             if 'busygroup' in error_msg or 'group already exists' in error_msg:
-                return  # already exists, that's fine
+                return
             else:
                 raise
 
@@ -66,28 +72,17 @@ class StreamConsumer:
         """
         self.ensure_group(stream_name)
 
-        # XREADGROUP parameters: group, consumer, streams dict
-        # Blocking: block=0 means block indefinitely; block=None returns immediately.
-        block_arg = block_ms if block_ms is not None else 0
-        # Note: redis-py expects block in milliseconds; 0 means no blocking? Actually 0 = no blocking in some clients, but redis xread block=0 means immediate return. Use block=0 for non-block, block>0 for wait. For indefinite, pass 0? Let's check: Redis XREAD with block=0 returns immediately. To block indefinitely, omit block or set negative? Actually Redis: block < 0 means no blocking? I'm mixing. Simpler: if block_ms is None, we don't pass block (non-blocking). If block_ms == 0, we can set block=0 (return immediately). For indefinite, set block to a large number? The test likely uses blocking of 5000ms. We'll implement as: block = block_ms if block_ms is not None else 0, and pass it. Non-blocking: call with block=None -> then block=0? We'll treat None as non-block (block=0). That's acceptable.
-
-        # But I'll keep: block = block_ms if block_ms is not None else 0. That's what we'll do.
-
         try:
             result = self.client.xreadgroup(
                 groupname=self.group_name,
                 consumername=self.consumer_id,
                 streams={stream_name: '>'},
                 count=count,
-                block=block_ms  # if None? Let's pass block_ms directly; if None, redis-py might treat as no block.
+                block=block_ms
             )
         except redis.exceptions.TimeoutError:
-            # A blocking XREADGROUP hitting the client's own socket read timeout
-            # is indistinguishable from "no new messages this window" -- not a
-            # real connectivity failure. Treat it the same as an empty result.
             return []
 
-        # result format: list of (stream, [(message_id, data), ...])
         messages = []
         if result:
             for stream, msg_list in result:
@@ -115,8 +110,6 @@ class StreamConsumer:
         Returns:
             List of pending message IDs and their data.
         """
-        # Use XPENDING to get summary or details
-        # XPENDING stream group [start end count] [consumer]
         if consumer:
             return self.client.xpending(stream_name, self.group_name, consumer=consumer)
         else:

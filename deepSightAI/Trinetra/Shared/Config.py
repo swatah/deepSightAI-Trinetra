@@ -1,16 +1,10 @@
 """
-Loader for the global config file (config/global_config.yaml).
-
-Every service reads shared defaults through here instead of duplicating
-numbers. Per-node overrides still go through environment variables, e.g.:
-
-    from shared.config import get as get_config
-    FPS = int(os.getenv("EXTRACTION_FPS", get_config("extraction.fps", 5)))
+Loader for the global config file (config/global_config.yaml) under deepSightAI.Trinetra.Shared.Config.
 """
 import os
 import threading
-
 import yaml
+
 
 def _find_default_config() -> str:
     curr = os.path.abspath(__file__)

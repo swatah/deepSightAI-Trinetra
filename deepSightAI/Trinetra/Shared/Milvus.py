@@ -1,10 +1,8 @@
 """
-T1.3.5: Milvus tenant isolation
+T1.3.5: Milvus tenant isolation under deepSightAI.Trinetra.Shared.Milvus.
 
 Provides utilities to ensure Milvus data is tenant-isolated.
 Strategy: Each tenant gets their own collection named `video_frames_<tenant_id>`.
-
-Alternative (not chosen): single collection with `tenant_id` field and filter.
 """
 
 import os
@@ -19,11 +17,10 @@ from pymilvus import (
     utility
 )
 
-
 import time
 import logging
 
-logger = logging.getLogger("shared.milvus")
+logger = logging.getLogger("deepSightAI.Trinetra.Shared.Milvus")
 
 # Default embedding dimension for CLIP ViT-B-32
 DEFAULT_EMBEDDING_DIM = 512
@@ -78,7 +75,6 @@ def get_collection_name(tenant_id: str) -> str:
     Returns:
         Collection name: "video_frames_<tenant_id>"
     """
-    # Sanitize tenant_id for use in collection name
     safe_tenant = tenant_id.replace("-", "_").replace(" ", "_")
     return f"video_frames_{safe_tenant}"
 

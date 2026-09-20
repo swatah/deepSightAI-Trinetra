@@ -31,7 +31,7 @@ class RtspSourceRequest(BaseModel):
 
 # --- AUTH DEPENDENCY ---
 try:
-    from shared.middleware import require_auth
+    from deepSightAI.Trinetra.Shared.Middleware import require_auth
     AUTH_AVAILABLE = True
 except ImportError:
     # Shared middleware not available; skip auth (development only)
@@ -254,7 +254,7 @@ async def replay_video(video_id: str, current_user=Depends(require_auth) if AUTH
         if "admin" not in user_roles and current_user.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Admin role required")
     
-    from shared.streaming.replay import ReplayService
+    from deepSightAI.Trinetra.Shared.Streaming.Replay import ReplayService
     service = ReplayService()
     count = service.replay(video_id)
     return {"replayed": count, "video_id": video_id}

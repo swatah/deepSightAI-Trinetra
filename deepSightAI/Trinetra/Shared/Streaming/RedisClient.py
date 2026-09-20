@@ -28,7 +28,6 @@ def create_redis_client(decode_responses: bool = True, **kwargs) -> redis.Redis:
         Configured Redis client instance
     """
     url = get_redis_url()
-    # Parse URL to extract host/port/password if needed? redis.from_url handles it.
     return redis.Redis.from_url(url, decode_responses=decode_responses, **kwargs)
 
 

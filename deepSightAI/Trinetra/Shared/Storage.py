@@ -1,5 +1,5 @@
 """
-Storage management utilities for MinIO.
+Storage management utilities for MinIO under deepSightAI.Trinetra.Shared.Storage.
 
 Provides bucket lifecycle policy configuration (e.g. 7-day retention for raw frames)
 and fallback scheduled cleanup utilities.
@@ -20,7 +20,7 @@ except Exception:
     Expiration = MagicMock
     Filter = MagicMock
 
-logger = logging.getLogger("shared.storage")
+logger = logging.getLogger("deepSightAI.Trinetra.Shared.Storage")
 
 DEFAULT_FRAME_RETENTION_DAYS = 7
 
@@ -88,7 +88,6 @@ def cleanup_expired_frames(
     try:
         objects = minio_client.list_objects(bucket_name, recursive=True)
         for obj in objects:
-            # Check last_modified timestamp
             if obj.last_modified and obj.last_modified < cutoff:
                 minio_client.remove_object(bucket_name, obj.object_name)
                 deleted_count += 1

@@ -8,8 +8,8 @@ from unittest.mock import patch, MagicMock, ANY
 import sys
 import os
 
-from shared.streaming.consumer import StreamConsumer
-from shared.streaming.schema import FrameReadyEvent
+from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer
+from deepSightAI.Trinetra.Shared.Streaming.Schema import FrameReadyEvent
 
 
 def test_embedder_uses_event_consumer():
@@ -31,7 +31,7 @@ def test_embedder_uses_event_consumer():
     
     # Assertions that should FAIL for current polling implementation:
     # 1. Should import StreamConsumer
-    assert "from shared.streaming.consumer import StreamConsumer" in source, \
+    assert ("from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer" in source or "from shared.streaming.consumer import StreamConsumer" in source), \
         "Embedder must import StreamConsumer"
     
     # 2. Should create a StreamConsumer instance
