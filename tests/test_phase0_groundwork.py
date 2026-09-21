@@ -69,38 +69,29 @@ class TestGW1FramePreservation:
         assert mock_minio.remove_object.call_count == 0
 
     def test_event_consumer_does_not_call_delete(self):
-        """Verify EmbedderConsumer.process_event does not delete frames."""
-        from Embedder.event_consumer import EmbedderConsumer
+        """Verify Embedder frame processing does not delete frames from MinIO (GW-1)."""
+        from deepSightAI.Trinetra.Embedder.embedder import process_segment_frames
+        import torch
 
         mock_minio = MagicMock()
         mock_collection = MagicMock()
         mock_collection.schema.fields = [MagicMock() for _ in range(7)]
 
-        consumer = EmbedderConsumer(
-            milvus_collection=mock_collection,
-            minio_client=mock_minio,
-            group_name="test-group",
-            consumer_id="test-consumer"
-        )
-
-        event = FrameReadyEvent(
-            video_id="test_vid",
-            segment_id=0,
-            frame_paths=["path/to/frame.jpg"],
-            timestamps=[1.0],
-            sequence_numbers=[0],
-            extractor_id="test_extractor",
-            bucket_name="frames",
-            timestamp=datetime.utcnow(),
-            tenant_id="tenant_1",
-            camera_id="cam_front"
-        )
-
-        with patch("Embedder.event_consumer.encode_images") as mock_encode, \
-             patch("os.unlink"):
-            import torch
+        with patch("deepSightAI.Trinetra.Embedder.embedder.download_frame_objects", return_value=["/tmp/f1.jpg"]), \
+             patch("deepSightAI.Trinetra.Embedder.embedder.encode_images") as mock_encode, \
+             patch("deepSightAI.Trinetra.Embedder.embedder.cleanup_temp_files"), \
+             patch("deepSightAI.Trinetra.Embedder.embedder.frame_exists", return_value=False):
             mock_encode.return_value = torch.ones((1, 512))
-            consumer.process_event(event)
+            process_segment_frames(
+                minio_client=mock_minio,
+                collection=mock_collection,
+                video_id="test_vid",
+                segment_path="test_vid/segment_0000",
+                frame_objects=["path/to/frame.jpg"],
+                timestamps=[1.0],
+                tenant_id="tenant_1",
+                camera_id="cam_front"
+            )
 
         assert mock_minio.remove_object.call_count == 0
 
@@ -144,7 +135,7 @@ class TestGW1FramePreservation:
 
     def test_dual_consumers_access_same_frames_without_404(self, tmp_path):
         """GW-1: Verify two independent consumers access identical frames in MinIO without 404 NoSuchKey."""
-        from Embedder.event_consumer import EmbedderConsumer
+        from deepSightAI.Trinetra.Embedder.embedder import process_segment_frames
         import torch
 
         # In-memory storage mock: would fail with 404 if previous consumer deleted the object
@@ -171,41 +162,32 @@ class TestGW1FramePreservation:
         mock_collection_b = MagicMock()
         mock_collection_b.schema.fields = [MagicMock() for _ in range(7)]
 
-        # Consumer 1: Main vector embedder
-        dsai_consumer_a = EmbedderConsumer(
-            milvus_collection=mock_collection_a,
-            minio_client=mock_minio,
-            group_name="embedder-group",
-            consumer_id="embedder-worker-1"
-        )
-
-        # Consumer 2: Independent secondary consumer (e.g. alert / LPR / audit worker)
-        dsai_consumer_b = EmbedderConsumer(
-            milvus_collection=mock_collection_b,
-            minio_client=mock_minio,
-            group_name="alert-group",
-            consumer_id="alert-worker-1"
-        )
-
-        dsai_event = FrameReadyEvent(
-            video_id="traffic_stream",
-            segment_id=0,
-            frame_paths=["tenant_alpha/cam_gate/2026-09-20/frame_001.jpg"],
-            timestamps=[10.0],
-            sequence_numbers=[1],
-            extractor_id="ext-01",
-            bucket_name="frames",
-            timestamp=datetime.utcnow(),
-            tenant_id="tenant_alpha",
-            camera_id="cam_gate"
-        )
-
-        with patch("Embedder.event_consumer.encode_images", return_value=torch.ones((1, 512))), \
-             patch("os.unlink"):
-            # Consumer A processes event
-            dsai_consumer_a.process_event(dsai_event)
-            # Consumer B processes same event afterwards
-            dsai_consumer_b.process_event(dsai_event)
+        with patch("deepSightAI.Trinetra.Embedder.embedder.download_frame_objects", return_value=[str(tmp_path / "f1.jpg")]), \
+             patch("deepSightAI.Trinetra.Embedder.embedder.encode_images", return_value=torch.ones((1, 512))), \
+             patch("deepSightAI.Trinetra.Embedder.embedder.cleanup_temp_files"), \
+             patch("deepSightAI.Trinetra.Embedder.embedder.frame_exists", return_value=False):
+            # Consumer A (main vector embedder) processes segment
+            process_segment_frames(
+                minio_client=mock_minio,
+                collection=mock_collection_a,
+                video_id="traffic_stream",
+                segment_path="traffic_stream/segment_0000",
+                frame_objects=["tenant_alpha/cam_gate/2026-09-20/frame_001.jpg"],
+                timestamps=[10.0],
+                tenant_id="tenant_alpha",
+                camera_id="cam_gate"
+            )
+            # Consumer B (secondary consumer e.g. alert / LPR) processes same frames afterwards
+            process_segment_frames(
+                minio_client=mock_minio,
+                collection=mock_collection_b,
+                video_id="traffic_stream",
+                segment_path="traffic_stream/segment_0000",
+                frame_objects=["tenant_alpha/cam_gate/2026-09-20/frame_001.jpg"],
+                timestamps=[10.0],
+                tenant_id="tenant_alpha",
+                camera_id="cam_gate"
+            )
 
         # Assert BOTH consumers inserted into their respective collections
         assert mock_collection_a.insert.called
@@ -243,7 +225,7 @@ class TestGW2SearchContract:
         from SearchService.main import SearchResult
         res = SearchResult(
             video_id="v1",
-            frame_path="tenant1/cam1/2026-09-20/f1.jpg",
+            thumbnail_url="http://minio/f1.jpg",
             score=0.88,
             camera_id="cam1",
             frame_timestamp=12.5
@@ -251,6 +233,8 @@ class TestGW2SearchContract:
         assert res.video_id == "v1"
         assert res.camera_id == "cam1"
         assert res.frame_timestamp == 12.5
+        assert res.thumbnail_url == "http://minio/f1.jpg"
+        assert "frame_path" not in SearchResult.model_fields
 
 
 class TestGW3FrameReadyEvent:

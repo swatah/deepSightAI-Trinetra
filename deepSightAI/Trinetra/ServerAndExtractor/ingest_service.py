@@ -124,8 +124,13 @@ async def ingest_endpoint(
     if source_type not in valid_sources:
         raise HTTPException(status_code=400, detail=f"Invalid source_type. Must be one of {valid_sources}")
 
-    # Determine tenant_id
+    # Determine tenant_id and camera_id
     tenant_id = x_tenant_id or "default"
+    camera_id = (
+        (form.get("camera_id") if "multipart/form-data" in content_type else json_data.get("camera_id"))
+        or request.headers.get("X-Camera-ID")
+        or "cam_default"
+    )
 
     # Generate IDs
     job_id = get_job_id()
@@ -167,6 +172,8 @@ async def ingest_endpoint(
             "video_id": video_id,
             "source_type": "file",
             "filename": filename,
+            "tenant_id": tenant_id,
+            "camera_id": camera_id,
         }
 
         # Dispatch asynchronously
@@ -181,6 +188,8 @@ async def ingest_endpoint(
             "status": "accepted",
             "video_id": video_id,
             "source_type": source_type,
+            "tenant_id": tenant_id,
+            "camera_id": camera_id,
             "message": "File ingestion started"
         }
 
@@ -195,7 +204,9 @@ async def ingest_endpoint(
             "job_id": job_id,
             "video_id": video_id,
             "source_type": "rtsp",
-            "rtsp_url": rtsp_url
+            "rtsp_url": rtsp_url,
+            "tenant_id": tenant_id,
+            "camera_id": camera_id,
         }
 
         try:
@@ -209,6 +220,8 @@ async def ingest_endpoint(
             "status": "accepted",
             "video_id": video_id,
             "source_type": source_type,
+            "tenant_id": tenant_id,
+            "camera_id": camera_id,
             "message": "RTSP monitoring started"
         }
 

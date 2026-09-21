@@ -88,3 +88,25 @@ class EmbedderProcessingCompleted(BaseModel):
     embeddings_inserted: int = Field(ge=0)
     duration_seconds: float = Field(ge=0)
     timestamp: datetime
+
+
+class ObjectDetectedEvent(BaseModel):
+    """
+    Event emitted when an object (person/vehicle) is detected and written to Milvus (DM-6, VP-22).
+    Published to 'events:object_detected'.
+    """
+    event_type: Literal["object.detected"] = "object.detected"
+    video_object_pk: str
+    tenant_id: str = Field(default="default")
+    camera_id: str
+    video_id: str
+    frame_timestamp: float
+    frame_path: str
+    crop_path: Optional[str] = None
+    object_class: str  # "person" or "vehicle"
+    confidence: float
+    bbox: List[float] = Field(default_factory=list)  # [x1, y1, x2, y2]
+    attributes: Optional[dict] = Field(default_factory=dict)
+    has_plate_read: bool = False
+    plate_number: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)

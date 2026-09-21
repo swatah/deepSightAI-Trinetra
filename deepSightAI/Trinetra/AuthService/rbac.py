@@ -32,15 +32,20 @@ def require_permission(required_permission: str):
 
         roles = user_payload.get("roles", [])
         if not isinstance(roles, list):
-            roles = []
+            roles = [roles] if roles else []
 
-        if required_permission not in roles:
+        permissions = user_payload.get("permissions", [])
+        if not isinstance(permissions, list):
+            permissions = [permissions] if permissions else []
+
+        all_perms = set(roles + permissions)
+
+        if "admin" not in all_perms and required_permission not in all_perms:
             raise HTTPException(
                 status_code=403,
                 detail=f"Missing required permission: {required_permission}"
             )
 
-        # Permission granted; could return user_payload or True if needed
         return True
 
     return dependency

@@ -132,3 +132,30 @@ def init_tenant_schema(tenant_id: str):
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "tenant_{safe_tenant_id}"'))
         conn.commit()
     Base.metadata.create_all(bind=engine)
+
+
+def dsai_get_tenant_schemas(connection=None) -> list:
+    """
+    Discover all tenant schemas (tenant_%) plus public and default tenant (DM-10).
+    """
+    target_tenant = os.getenv("TENANT_ID")
+    if target_tenant:
+        safe_tenant = "".join(c for c in target_tenant if c.isalnum() or c == "_")
+        return [f"tenant_{safe_tenant}"]
+
+    schemas = ["public", "tenant_default"]
+    if connection is not None:
+        try:
+            result = connection.execute(
+                text("SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'tenant_%'")
+            )
+            for row in result:
+                schema_name = row[0]
+                if schema_name not in schemas:
+                    schemas.append(schema_name)
+        except Exception:
+            pass
+    return schemas
+
+
+get_tenant_schemas = dsai_get_tenant_schemas

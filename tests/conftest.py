@@ -86,6 +86,12 @@ class _DeepSightAliasFinder(MetaPathFinder):
         "deepSightAI.Trinetra.Shared.streaming.replay": "deepSightAI.Trinetra.Shared.Streaming.Replay",
         "deepSightAI.Trinetra.Shared.streaming.redis_client": "deepSightAI.Trinetra.Shared.Streaming.RedisClient",
         "deepSightAI.Trinetra.Shared.streaming": "deepSightAI.Trinetra.Shared.Streaming",
+        "shared.errors": "deepSightAI.Trinetra.Shared.Errors",
+        "Shared.errors": "deepSightAI.Trinetra.Shared.Errors",
+        "deepSightAI.Trinetra.Shared.errors": "deepSightAI.Trinetra.Shared.Errors",
+        "shared.logging_setup": "deepSightAI.Trinetra.Shared.LoggingSetup",
+        "Shared.logging_setup": "deepSightAI.Trinetra.Shared.LoggingSetup",
+        "deepSightAI.Trinetra.Shared.logging_setup": "deepSightAI.Trinetra.Shared.LoggingSetup",
         "shared": "deepSightAI.Trinetra.Shared",
         "Shared": "deepSightAI.Trinetra.Shared",
         "ServerAndExtractor": "deepSightAI.Trinetra.ServerAndExtractor",
@@ -101,6 +107,7 @@ class _DeepSightAliasFinder(MetaPathFinder):
         "AuditService": "deepSightAI.Trinetra.AuditService",
         "audit_service": "deepSightAI.Trinetra.AuditService.audit_service",
         "UI": "deepSightAI.Trinetra.UI",
+        "VisionProcessingService": "deepSightAI.Trinetra.VisionProcessingService",
     }
 
     def find_spec(self, fullname, path, target=None):

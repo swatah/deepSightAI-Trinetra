@@ -70,7 +70,8 @@ def cleanup_expired_frames(
 ) -> int:
     """
     Fallback scheduled cleaner: explicitly deletes objects older than retention_days.
-    Useful in testing or when MinIO lifecycle scanner is not running.
+    Enforces fail-closed legal-hold gating (GOV-1): objects under active legal hold
+    are never deleted.
 
     Args:
         minio_client: Initialized MinIO client
@@ -81,6 +82,7 @@ def cleanup_expired_frames(
         Number of objects deleted
     """
     from datetime import datetime, timezone, timedelta
+    from deepSightAI.Trinetra.Shared.Retention import DataRetentionManager
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     deleted_count = 0
@@ -89,6 +91,19 @@ def cleanup_expired_frames(
         objects = minio_client.list_objects(bucket_name, recursive=True)
         for obj in objects:
             if obj.last_modified and obj.last_modified < cutoff:
+                # Extract tenant_id and camera_id if present in path (format: tenant_id/camera_id/...)
+                parts = (obj.object_name or "").split("/")
+                tenant_id = parts[0] if len(parts) > 0 else "default"
+                camera_id = parts[1] if len(parts) > 1 else None
+
+                # Gating: check legal hold (GOV-1)
+                if DataRetentionManager.is_legal_hold_active(tenant_id, camera_id) or DataRetentionManager.is_legal_hold_active(tenant_id, None):
+                    logger.info(
+                        f"Skipping expired frame deletion '{obj.object_name}' under active legal hold "
+                        f"(tenant={tenant_id}, camera={camera_id})"
+                    )
+                    continue
+
                 minio_client.remove_object(bucket_name, obj.object_name)
                 deleted_count += 1
                 logger.debug(f"Removed expired frame: {obj.object_name}")

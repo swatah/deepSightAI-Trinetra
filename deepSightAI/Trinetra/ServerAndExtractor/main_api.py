@@ -1,12 +1,15 @@
 import uvicorn
 import httpx
-import ffmpeg
+try:
+    import ffmpeg
+except ImportError:
+    ffmpeg = None
 import asyncio
 import os
 import tempfile
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from minio import Minio
 from datetime import datetime
 
@@ -22,12 +25,24 @@ VIDEO_BUCKET = "videos"
 class VideoSourceRequest(BaseModel):
     video_uri: str
     tenant_id: str = "default"
-    camera_id: Optional[str] = None
+    camera_id: str
+
+    @field_validator("camera_id")
+    def validate_camera_id(cls, v):
+        if not v or not str(v).strip():
+            raise ValueError("camera_id is required at ingestion")
+        return str(v).strip()
 
 class RtspSourceRequest(BaseModel):
     rtsp_url: str
     tenant_id: str = "default"
-    camera_id: Optional[str] = None
+    camera_id: str
+
+    @field_validator("camera_id")
+    def validate_camera_id(cls, v):
+        if not v or not str(v).strip():
+            raise ValueError("camera_id is required at ingestion")
+        return str(v).strip()
 
 # --- AUTH DEPENDENCY ---
 try:
@@ -65,6 +80,9 @@ async def process_video(request: VideoSourceRequest, http_request: Request):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch video from MinIO: {e}")
 
+    if ffmpeg is None:
+        raise HTTPException(status_code=500, detail="ffmpeg is not installed on this system")
+
     try:
         probe = ffmpeg.probe(local_video_path)
         duration = float(probe['format']['duration'])
@@ -73,8 +91,9 @@ async def process_video(request: VideoSourceRequest, http_request: Request):
             start_time = i
             segment_dur = min(SEGMENT_DURATION_SECONDS, duration - start_time)
             segments.append({"start": start_time, "duration": segment_dur})
-    except ffmpeg.Error as e:
-        raise HTTPException(status_code=400, detail=f"Failed to probe video file: {e.stderr.decode()}")
+    except Exception as e:
+        err_msg = getattr(e, "stderr", b"").decode() if hasattr(e, "stderr") and e.stderr else str(e)
+        raise HTTPException(status_code=400, detail=f"Failed to probe video file: {err_msg}")
 
     forward_headers = {}
     incoming_auth = http_request.headers.get("Authorization")

@@ -26,6 +26,7 @@ from pymilvus import (
 
 # Import streaming components
 from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer
+from deepSightAI.Trinetra.Shared.Streaming.Producer import StreamProducer
 from deepSightAI.Trinetra.Shared.Streaming.Schema import FrameReadyEvent
 from deepSightAI.Trinetra.Shared.Config import get as get_config
 from deepSightAI.Trinetra.Shared.Milvus import ensure_tenant_collection, connect_milvus_with_retry
@@ -734,27 +735,49 @@ def update_embedder_status(status: str):
 
 # ==================== EVENT-DRIVEN MAIN LOOP (T2.2.8) ====================
 
-def process_events():
+def process_events(
+    consumer: Optional[StreamConsumer] = None,
+    producer: Optional[StreamProducer] = None,
+    minio_client=None,
+    stop_flag=None,
+    max_iterations: Optional[int] = None,
+):
     """
     Main event loop: consume FrameReadyEvent messages from Redis Stream.
-    Replaces the old polling-based process_frames() loop.
+    Implements bounded retries (REL-57) and DLQ routing before acknowledgment.
     """
-    minio_client = get_minio_client()
+    if minio_client is None:
+        minio_client = get_minio_client()
     
-    # Create Redis Stream consumer
-    consumer = StreamConsumer(
-        group_name="embedder-group",
-        consumer_id=EMBEDDER_ID,
-        redis_client=None  # will create via create_redis_client()
-    )
+    # Create Redis Stream consumer if not provided
+    if consumer is None:
+        consumer = StreamConsumer(
+            group_name="embedder-group",
+            consumer_id=EMBEDDER_ID,
+            redis_client=None  # will create via create_redis_client()
+        )
+
+    if producer is None:
+        producer = StreamProducer()
+
+    message_retry_counts: dict = {}
+    max_retries = int(os.getenv("MAX_MESSAGE_RETRIES", "3"))
+    dlq_stream = os.getenv("DLQ_STREAM", "events:dlq")
     
     # Mark as available when starting
-    update_embedder_status("available")
+    try:
+        update_embedder_status("available")
+    except Exception:
+        pass
     
     stream_name = os.getenv("FRAME_EVENTS_STREAM", "frames")
     logger.info(f"Embedder event consumer started on {stream_name}, waiting for FrameReadyEvent messages...")
     
+    iteration = 0
     while True:
+        if stop_flag and stop_flag.is_set():
+            break
+
         try:
             # Read events from Redis Stream (block up to 5s)
             messages = consumer.read(
@@ -764,7 +787,9 @@ def process_events():
             )
             
             if not messages:
-                # No messages, continue polling
+                iteration += 1
+                if max_iterations and iteration >= max_iterations:
+                    break
                 continue
             
             for msg in messages:
@@ -801,18 +826,45 @@ def process_events():
 
                     # Acknowledge message after successful processing
                     consumer.ack(stream_name, msg.id)
+                    message_retry_counts.pop(msg.id, None)
                     
                 except Exception as e:
-                    logger.error(f"Failed to process event {msg.id}: {e}")
-                    # Do NOT ack – message will be redelivered
-                    # Continue with next message
+                    message_retry_counts[msg.id] = message_retry_counts.get(msg.id, 0) + 1
+                    attempts = message_retry_counts[msg.id]
+                    logger.error(f"Failed to process event {msg.id} (attempt {attempts}/{max_retries}): {e}")
+                    if attempts >= max_retries:
+                        logger.error(f"Event {msg.id} exceeded {max_retries} retries, routing to DLQ '{dlq_stream}'")
+                        if producer is not None:
+                            try:
+                                producer.publish(dlq_stream, {
+                                    "source_stream": stream_name,
+                                    "message_id": msg.id,
+                                    "event": msg.data.get("event"),
+                                    "error": str(e),
+                                })
+                            except Exception as dlq_e:
+                                logger.error(f"Failed publishing to DLQ: {dlq_e}")
+                        consumer.ack(stream_name, msg.id)
+                        message_retry_counts.pop(msg.id, None)
                     continue
+
+            iteration += 1
+            if max_iterations and iteration >= max_iterations:
+                break
         
         except Exception as e:
             logger.exception(f"Consumer error: {e}")
-            update_embedder_status("error")
-            time.sleep(5)  # backoff before reconnecting
-            # Recreate consumer on error? For now continue
+            try:
+                update_embedder_status("error")
+            except Exception:
+                pass
+            iteration += 1
+            if max_iterations and iteration >= max_iterations:
+                break
+            time.sleep(1)
+
+
+dsai_process_events = process_events
 
 
 if __name__ == "__main__":

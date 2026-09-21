@@ -10,6 +10,7 @@ from .Schema import (
     IngestJobCompleted,
     EmbedderProcessingStarted,
     EmbedderProcessingCompleted,
+    ObjectDetectedEvent,
 )
 from .Replay import ReplayService
 from .RedisClient import create_redis_client, test_connection
@@ -22,6 +23,7 @@ __all__ = [
     "IngestJobCompleted",
     "EmbedderProcessingStarted",
     "EmbedderProcessingCompleted",
+    "ObjectDetectedEvent",
     "ReplayService",
     "create_redis_client",
     "test_connection",

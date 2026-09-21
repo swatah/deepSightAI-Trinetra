@@ -2,8 +2,9 @@
 Embedder package - CLIP image & text embedding and Redis Streams consumer.
 """
 
-from .event_consumer import EmbedderConsumer
+from .embedder import process_events, dsai_process_events
 
 __all__ = [
-    "EmbedderConsumer",
+    "process_events",
+    "dsai_process_events",
 ]

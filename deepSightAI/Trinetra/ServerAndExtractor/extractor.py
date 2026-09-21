@@ -121,6 +121,73 @@ def get_producer() -> StreamProducer:
     return _producer
 
 
+import json
+
+# In-memory recoverable orphan log (REL-56)
+DSAI_RECOVERABLE_ORPHANS = []
+
+
+def dsai_record_recoverable_orphan(event: FrameReadyEvent, error_message: str):
+    """Record recoverable orphan event when Redis publish exhausts retries (REL-56)."""
+    orphan_record = {
+        "event": event.model_dump() if hasattr(event, "model_dump") else event.dict(),
+        "error": error_message,
+        "recorded_at": datetime.utcnow().isoformat(),
+        "status": "RECOVERABLE_ORPHAN"
+    }
+    DSAI_RECOVERABLE_ORPHANS.append(orphan_record)
+    try:
+        orphan_log_path = os.getenv("ORPHAN_LOG_PATH", "/tmp/dsai_recoverable_orphans.jsonl")
+        with open(orphan_log_path, "a") as f:
+            f.write(json.dumps(orphan_record) + "\n")
+        print(f"[{EXTRACTOR_ID}] Recorded recoverable orphan to {orphan_log_path}")
+    except Exception as log_e:
+        print(f"[{EXTRACTOR_ID}] Failed to write orphan log: {log_e}")
+
+
+def dsai_upload_frame_with_retry(
+    minio_client,
+    bucket_name: str,
+    object_name: str,
+    file_path: str,
+    max_retries: int = 3,
+    initial_delay: float = 0.1,
+    backoff: float = 2.0
+) -> bool:
+    """
+    Retry with backoff on extractor MinIO upload; route to DLQ on exhaustion (REL-55).
+    """
+    delay = initial_delay
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            minio_client.fput_object(bucket_name, object_name, file_path)
+            return True
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries:
+                time.sleep(delay)
+                delay *= backoff
+
+    # DLQ routing on exhaustion (REL-55)
+    dlq_payload = {
+        "event_type": "minio.upload.failed",
+        "extractor_id": EXTRACTOR_ID,
+        "bucket": bucket_name,
+        "object_name": object_name,
+        "error": str(last_err),
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    try:
+        producer = get_producer()
+        producer.publish("events:dlq", dlq_payload)
+        print(f"[{EXTRACTOR_ID}] Routed failed upload {object_name} to events:dlq")
+    except Exception as dlq_e:
+        print(f"[{EXTRACTOR_ID}] Failed to route to DLQ: {dlq_e}")
+
+    return False
+
+
 def publish_frame_ready_event(video_id: str, segment_id: int, frame_paths: list,
                                timestamps: list, sequence_numbers: list,
                                bucket_name: str = None,
@@ -128,11 +195,12 @@ def publish_frame_ready_event(video_id: str, segment_id: int, frame_paths: list,
                                camera_id: str = None,
                                correlation_id: str = None):
     """
-    Publish FrameReadyEvent to Redis Streams.
+    Publish FrameReadyEvent to Redis Streams with retry and orphan recording (REL-56).
     """
     if bucket_name is None:
         bucket_name = FRAME_BUCKET
 
+    event = None
     try:
         event = FrameReadyEvent(
             video_id=video_id,
@@ -147,13 +215,30 @@ def publish_frame_ready_event(video_id: str, segment_id: int, frame_paths: list,
             correlation_id=correlation_id,
             timestamp=datetime.utcnow()
         )
-        stream_name = os.getenv("FRAME_EVENTS_STREAM", "frames")
-        producer = get_producer()
-        producer.publish(stream_name, event)
-        print(f"[{EXTRACTOR_ID}] Published FrameReadyEvent to {stream_name} for video {video_id}, segment {segment_id}")
     except Exception as e:
-        print(f"[{EXTRACTOR_ID}] Failed to publish FrameReadyEvent: {e}")
-        # Don't raise - best effort
+        print(f"[{EXTRACTOR_ID}] Failed to construct FrameReadyEvent: {e}")
+        return
+
+    stream_name = os.getenv("FRAME_EVENTS_STREAM", "frames")
+    max_retries = 3
+    delay = 0.05 if "pytest" in sys.modules else 0.1
+    last_err = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            producer = get_producer()
+            producer.publish(stream_name, event)
+            print(f"[{EXTRACTOR_ID}] Published FrameReadyEvent to {stream_name} for video {video_id}, segment {segment_id}")
+            return
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2.0
+
+    # Exhaustion: Record recoverable orphan (REL-56)
+    print(f"[{EXTRACTOR_ID}] Exhausted retries publishing FrameReadyEvent for video {video_id}: {last_err}")
+    dsai_record_recoverable_orphan(event, str(last_err))
 
 # --- CLASS FOR VIDEO FILE EXTRACTION (UNCHANGED) ---
 class GStreamerFileExtractor:
@@ -221,28 +306,29 @@ class GStreamerRtspExtractor:
                         tmpfile.flush()
                         date_str = datetime.utcnow().strftime("%Y-%m-%d")
                         frame_name = f"{self.tenant_id}/{self.camera_id}/{date_str}/frame_{int(time.time() * 1000)}_{self.sequence_counter:06d}.jpg"
-                        self.minio_client.fput_object(self.bucket_name, frame_name, tmpfile.name)
-                        print(f"[{EXTRACTOR_ID}] Uploaded {frame_name} to bucket {self.bucket_name}")
-                        _rtsp_record_latency(time.monotonic() - frame_start)
+                        upload_ok = dsai_upload_frame_with_retry(self.minio_client, self.bucket_name, frame_name, tmpfile.name)
+                        if upload_ok:
+                            print(f"[{EXTRACTOR_ID}] Uploaded {frame_name} to bucket {self.bucket_name}")
+                            _rtsp_record_latency(time.monotonic() - frame_start)
 
-                        # Publish FrameReadyEvent
-                        try:
-                            # For RTSP, segment_id is always 0
-                            seq_num = self.sequence_counter
-                            self.sequence_counter += 1
-                            timestamp = time.time()
-                            publish_frame_ready_event(
-                                video_id=self.video_id,
-                                segment_id=0,
-                                frame_paths=[frame_name],
-                                timestamps=[timestamp],
-                                sequence_numbers=[seq_num],
-                                bucket_name=self.bucket_name,
-                                tenant_id=self.tenant_id,
-                                camera_id=self.camera_id
-                            )
-                        except Exception as e:
-                            print(f"[{EXTRACTOR_ID}] Failed to publish frame event: {e}")
+                            # Publish FrameReadyEvent
+                            try:
+                                # For RTSP, segment_id is always 0
+                                seq_num = self.sequence_counter
+                                self.sequence_counter += 1
+                                timestamp = time.time()
+                                publish_frame_ready_event(
+                                    video_id=self.video_id,
+                                    segment_id=0,
+                                    frame_paths=[frame_name],
+                                    timestamps=[timestamp],
+                                    sequence_numbers=[seq_num],
+                                    bucket_name=self.bucket_name,
+                                    tenant_id=self.tenant_id,
+                                    camera_id=self.camera_id
+                                )
+                            except Exception as e:
+                                print(f"[{EXTRACTOR_ID}] Failed to publish frame event: {e}")
 
             except Exception as e:
                 print(f"[{EXTRACTOR_ID}] Failed to upload frame: {e}")
@@ -344,13 +430,14 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
             for seq_num, frame_file in enumerate(frame_files):
                 local_frame_path = os.path.join(frames_output_dir, frame_file)
                 minio_object_name = f"{tenant_id}/{cid}/{date_str}/{video_basename}/segment_{segment_id:04d}/{frame_file}"
-                minio_client.fput_object(FRAME_BUCKET, minio_object_name, local_frame_path)
-                timestamp = start_time + seq_num / EXTRACTION_FPS
-                uploaded_frames.append({
-                    "object_name": minio_object_name,
-                    "timestamp": timestamp,
-                    "sequence_number": seq_num
-                })
+                upload_ok = dsai_upload_frame_with_retry(minio_client, FRAME_BUCKET, minio_object_name, local_frame_path)
+                if upload_ok:
+                    timestamp = start_time + seq_num / EXTRACTION_FPS
+                    uploaded_frames.append({
+                        "object_name": minio_object_name,
+                        "timestamp": timestamp,
+                        "sequence_number": seq_num
+                    })
 
             print(f"[{EXTRACTOR_ID}] Finished segment {segment_id} and uploaded {len(uploaded_frames)} frames to MinIO.")
 

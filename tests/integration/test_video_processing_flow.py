@@ -126,7 +126,7 @@ def test_full_video_processing_pipeline(services, test_tenant, sample_video_path
     collection.load()
 
     for result in results[:3]:  # Check top 3
-        frame_path = result["frame_path"]
+        thumbnail_url = result.get("thumbnail_url")
         video_id_from_result = result["video_id"]
 
         assert video_id_from_result == video_id
