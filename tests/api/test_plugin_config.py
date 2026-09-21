@@ -9,11 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from pathlib import Path
-import sys
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "AuthService"))
-
-from auth_service import app, get_db, require_auth, Base, Tenant
+from AuthService.auth_service import app, get_db, require_auth, Base, Tenant
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from jose import jwt

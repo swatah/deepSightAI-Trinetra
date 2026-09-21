@@ -9,11 +9,6 @@ from unittest.mock import MagicMock, patch
 import sys
 from pathlib import Path
 
-# Add repo root and Server and Extractor directory to path
-repo_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(repo_root))
-sys.path.insert(0, str(repo_root / "Server and Extractor"))
-
 from adapters.rtsp_adapter import RtspAdapter
 
 

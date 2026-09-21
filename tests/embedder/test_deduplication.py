@@ -6,9 +6,6 @@ from unittest.mock import patch, MagicMock
 import sys
 import os
 
-# Add the current directory to the path so we can import Embedder
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
 def test_no_duplicates_inserted():
     """Test that duplicate embeddings are not inserted into Milvus."""
     # Mock minio so that embedder can be imported

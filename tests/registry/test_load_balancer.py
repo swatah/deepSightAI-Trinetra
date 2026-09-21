@@ -20,9 +20,6 @@ import sys
 
 import pytest
 import redis
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'Server and Extractor'))
-
 TEST_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 

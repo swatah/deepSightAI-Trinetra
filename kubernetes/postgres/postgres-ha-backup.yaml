@@ -1,0 +1,203 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-ha
+  namespace: deepSightAI-Trinetra
+  labels:
+    app: postgres-ha
+    role: database
+spec:
+  serviceName: postgres-ha-service
+  replicas: 2
+  selector:
+    matchLabels:
+      app: postgres-ha
+  template:
+    metadata:
+      labels:
+        app: postgres-ha
+    spec:
+      containers:
+        - name: postgresql
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              value: trinetra
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: trinetra-postgres-credentials
+                  key: postgres-user
+                  optional: true
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: trinetra-postgres-credentials
+                  key: postgres-password
+                  optional: true
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - postgres
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-ha-service
+  namespace: deepSightAI-Trinetra
+  labels:
+    app: postgres-ha
+spec:
+  ports:
+    - port: 5432
+      name: postgres
+  clusterIP: None
+  selector:
+    app: postgres-ha
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-primary
+  namespace: deepSightAI-Trinetra
+  labels:
+    app: postgres-ha
+    role: primary
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+  selector:
+    app: postgres-ha
+    statefulset.kubernetes.io/pod-name: postgres-ha-0
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup-daily
+  namespace: deepSightAI-Trinetra
+  labels:
+    app: postgres-backup
+    component: disaster-recovery
+spec:
+  schedule: "0 1 * * *"  # Daily at 1 AM UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump-backup
+              image: postgres:15-alpine
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  echo "Starting PostgreSQL backup for deepSightAI-Trinetra tables..."
+                  BACKUP_DIR="/backups/$(date +%Y%m%d_%H%M%S)"
+                  mkdir -p "${BACKUP_DIR}"
+
+                  echo "Dumping core schema and tenant tables: cameras, plate_reads, watchlist_entries, alerts, audit_logs..."
+                  pg_dump -h "${PGHOST}" -U "${PGUSER}" -d "${PGDATABASE}" \
+                    -t cameras \
+                    -t plate_reads \
+                    -t watchlist_entries \
+                    -t alerts \
+                    -t audit_logs \
+                    -F c -b -v -f "${BACKUP_DIR}/trinetra_core_tables.dump"
+
+                  echo "Dumping full schema backup..."
+                  pg_dump -h "${PGHOST}" -U "${PGUSER}" -d "${PGDATABASE}" \
+                    --schema-only -F p -f "${BACKUP_DIR}/schema_all.sql"
+
+                  echo "Compressing backups..."
+                  gzip -f "${BACKUP_DIR}/schema_all.sql"
+
+                  echo "Backup completed successfully in ${BACKUP_DIR}."
+                  # Prune local backups older than 14 days
+                  find /backups -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} +
+              env:
+                - name: PGHOST
+                  value: postgres-primary
+                - name: PGDATABASE
+                  value: trinetra
+                - name: PGUSER
+                  value: postgres
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: trinetra-postgres-credentials
+                      key: postgres-password
+                      optional: true
+              volumeMounts:
+                - name: backup-volume
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 512Mi
+                limits:
+                  cpu: 1000m
+                  memory: 2Gi
+          volumes:
+            - name: backup-volume
+              persistentVolumeClaim:
+                claimName: postgres-backup-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backup-pvc
+  namespace: deepSightAI-Trinetra
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi

@@ -5,24 +5,30 @@ __pycache__/
 
 # Task tracking (local state)
 .task_state/
-# Kubernetes dev overlays  
-  (may contain secrets)
+
+# Kubernetes dev overlays (may contain secrets)
 k8s/overlays/development/
 k8s/overlays/staging/
-k8s/overla
-  ys/production/
-# Python                                                           
-  cache
-__pycache__/
-*.pyc
+k8s/overlays/production/
+
+# Python cache
 *.pyo
 *.pyd
 .Python
 env/
-venv/
 .venv/
-#          
-  IDE
+
+# IDE
 .vscode/
 .idea/
+*.egg-info/
+build/
+dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
 

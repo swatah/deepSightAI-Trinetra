@@ -11,8 +11,6 @@ from unittest.mock import MagicMock, patch
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
 # Import the modules we will implement
 from shared.streaming.schema import (
     IngestJobStarted,

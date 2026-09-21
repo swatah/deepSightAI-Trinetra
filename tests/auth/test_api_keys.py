@@ -13,11 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 from datetime import datetime, timedelta
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "AuthService"))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from auth_service import app, APIKey, Base, get_db
+from AuthService.auth_service import app, APIKey, Base, get_db
 from shared.middleware import set_jwt_public_key
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
@@ -167,7 +163,7 @@ class TestAPIKeyGeneration:
                 headers={"Authorization": f"Bearer {token}"},
                 json={"name": f"Key {i}"}
             )
-            assert resp.status_code == 200
+            assert resp.status_code == 200, f"Error: {resp.status_code} {resp.text}"
             prefixes.append(resp.json()["prefix"])
         assert len(set(prefixes)) == 3
 
@@ -199,7 +195,7 @@ class TestAPIKeyGeneration:
             headers={"Authorization": f"Bearer {token}"},
             json={"name": "Expiring Key", "expires_in_days": 7}
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, f"Error: {response.status_code} {response.text}"
         expires_at_str = response.json()["expires_at"]
         expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
         diff = expires_at - now

@@ -10,11 +10,6 @@ import sys
 from pathlib import Path
 import io
 
-# Add repo root and Server and Extractor directory to path
-repo_root = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(repo_root))
-sys.path.insert(0, str(repo_root / "Server and Extractor"))
-
 # Mock minio module before importing FileAdapter
 mock_minio = MagicMock()
 sys.modules['minio'] = mock_minio
