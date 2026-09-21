@@ -254,14 +254,24 @@ services:
       context: .
       dockerfile: deepSightAI/Trinetra/UI/Dockerfile
     ports:
-      - "8501:8501"
+      - "3000:3000"
     environment:
       SEARCH_SERVICE_URL: http://search-service:8081
       AUTH_SERVICE_URL: http://auth-service:8002
       WATCHLIST_SERVICE_URL: http://watchlist-matcher:8083
+      SERVER_HOST: http://main-api:8080
+      MINIO_URL: http://minio:9000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-changeme-replace-in-production}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
     depends_on:
       - search-service
       - watchlist-matcher
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   postgres_data:
