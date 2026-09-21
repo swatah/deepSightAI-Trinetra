@@ -78,6 +78,12 @@ def upgrade() -> None:
         op.create_index('ix_alerts_acknowledged', 'alerts', ['acknowledged'])
         op.create_index('ix_alerts_tenant_ack', 'alerts', ['tenant_id', 'acknowledged'])
         op.create_index('ix_alerts_tenant_id_pk', 'alerts', ['tenant_id', 'id'])
+        op.create_index(
+            'ix_alerts_tenant_wl_pk',
+            'alerts',
+            ['tenant_id', 'watchlist_entry_id', 'video_object_pk'],
+            unique=True
+        )
 
 
 def downgrade() -> None:

@@ -21,6 +21,7 @@ from minio import Minio
 
 from deepSightAI.Trinetra.Shared.LoggingSetup import dsai_get_logger
 from deepSightAI.Trinetra.Shared.Middleware import require_auth
+from deepSightAI.Trinetra.Shared.Streaming.RedisClient import create_redis_client
 from deepSightAI.Trinetra.Shared.Repositories.WatchlistRepository import (
     WatchlistRepository,
     AlertRepository,
@@ -72,21 +73,63 @@ def dsai_presign_thumbnail(dsai_path: Optional[str]) -> Optional[str]:
         return None
 
 
-# --- RBAC DEPENDENCY (WL-27, UI-89) ---
-def dsai_require_watchlist_write(dsai_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
-    """Verify authenticated user has watchlist:write permission (WL-27)."""
+# --- RBAC DEPENDENCIES (WL-27, UI-89, Plan item 47) ---
+def dsai_extract_user_scopes(dsai_user: Dict[str, Any]) -> set:
+    """Helper to extract user roles, permissions, and scopes into a unified set."""
     dsai_roles = dsai_user.get("roles", [])
     if not isinstance(dsai_roles, list):
         dsai_roles = [dsai_roles] if dsai_roles else []
     dsai_perms = dsai_user.get("permissions", [])
     if not isinstance(dsai_perms, list):
         dsai_perms = [dsai_perms] if dsai_perms else []
-    dsai_all = set(dsai_roles + dsai_perms)
+    dsai_scopes = dsai_user.get("scope", dsai_user.get("scopes", []))
+    if isinstance(dsai_scopes, str):
+        dsai_scopes = dsai_scopes.split()
+    elif not isinstance(dsai_scopes, list):
+        dsai_scopes = [dsai_scopes] if dsai_scopes else []
+    return set(dsai_roles + dsai_perms + dsai_scopes)
 
+
+def dsai_require_watchlist_write(dsai_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+    """Verify authenticated user has watchlist:write permission (WL-27)."""
+    dsai_all = dsai_extract_user_scopes(dsai_user)
     if "admin" not in dsai_all and "watchlist:write" not in dsai_all:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Missing required permission: watchlist:write"
+        )
+    return dsai_user
+
+
+def dsai_require_watchlist_read(dsai_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+    """Verify authenticated user has watchlist:read permission (Plan item 47)."""
+    dsai_all = dsai_extract_user_scopes(dsai_user)
+    if not dsai_all.intersection({"admin", "watchlist:read", "watchlist:write"}):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing required permission: watchlist:read"
+        )
+    return dsai_user
+
+
+def dsai_require_alerts_read(dsai_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+    """Verify authenticated user has alerts:read permission (Plan item 47)."""
+    dsai_all = dsai_extract_user_scopes(dsai_user)
+    if not dsai_all.intersection({"admin", "alerts:read", "alerts:write", "alerts:acknowledge"}):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing required permission: alerts:read"
+        )
+    return dsai_user
+
+
+def dsai_require_alerts_acknowledge(dsai_user: Dict[str, Any] = Depends(require_auth)) -> Dict[str, Any]:
+    """Verify authenticated user has alerts:acknowledge permission (Plan item 47)."""
+    dsai_all = dsai_extract_user_scopes(dsai_user)
+    if not dsai_all.intersection({"admin", "alerts:acknowledge"}):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing required permission: alerts:acknowledge"
         )
     return dsai_user
 
@@ -243,7 +286,7 @@ def dsai_list_watchlist_entries(
     entry_type: Optional[str] = Query(None, description="Filter by entry_type"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    dsai_user: Dict[str, Any] = Depends(require_auth)
+    dsai_user: Dict[str, Any] = Depends(dsai_require_watchlist_read)
 ):
     """List watchlist entries for the authenticated tenant."""
     dsai_tenant_id = str(dsai_user.get("tenant_id") or "default")
@@ -263,7 +306,7 @@ def dsai_list_watchlist_entries(
 )
 def dsai_get_watchlist_entry(
     dsai_id: int,
-    dsai_user: Dict[str, Any] = Depends(require_auth)
+    dsai_user: Dict[str, Any] = Depends(dsai_require_watchlist_read)
 ):
     """Get single watchlist entry by ID scoped to authenticated tenant."""
     dsai_tenant_id = str(dsai_user.get("tenant_id") or "default")
@@ -333,7 +376,7 @@ def dsai_poll_alerts(
     since_id: int = Query(0, ge=0, description="Fetch alerts with ID > since_id"),
     limit: int = Query(50, ge=1, le=200),
     unacknowledged_only: bool = Query(False),
-    dsai_user: Dict[str, Any] = Depends(require_auth)
+    dsai_user: Dict[str, Any] = Depends(dsai_require_alerts_read)
 ):
     """Poll alerts incrementally for the authenticated tenant (WL-32)."""
     dsai_tenant_id = str(dsai_user.get("tenant_id") or "default")
@@ -350,18 +393,55 @@ def dsai_poll_alerts(
 async def dsai_stream_alerts(
     request: Request,
     max_events: Optional[int] = Query(None, description="Optional cap on events for bounded testing"),
-    dsai_user: Dict[str, Any] = Depends(require_auth)
+    dsai_user: Dict[str, Any] = Depends(dsai_require_alerts_read)
 ):
     """
     Server-Sent Events (SSE) real-time alert stream (WL-32).
-    Streams alerts for the authenticated tenant as they occur.
+    Streams alerts for the authenticated tenant as they occur across service processes.
     """
     dsai_tenant_id = str(dsai_user.get("tenant_id") or "default")
     dsai_queue: asyncio.Queue = asyncio.Queue()
     dsai_register_sse_subscriber(dsai_queue)
 
+    # Cross-process Redis Pub/Sub subscription (WL-32)
+    dsai_stop_event = asyncio.Event()
+    dsai_pubsub = None
+    dsai_pubsub_task = None
+
+    try:
+        dsai_redis = create_redis_client()
+        dsai_pubsub = dsai_redis.pubsub()
+        dsai_pubsub.subscribe(f"channel:alerts:{dsai_tenant_id}")
+
+        async def dsai_redis_listener():
+            while not dsai_stop_event.is_set():
+                try:
+                    dsai_msg = await asyncio.to_thread(
+                        dsai_pubsub.get_message,
+                        ignore_subscribe_messages=True,
+                        timeout=1.0
+                    )
+                    if dsai_msg and dsai_msg.get("type") == "message":
+                        dsai_raw = dsai_msg.get("data")
+                        if dsai_raw:
+                            if isinstance(dsai_raw, bytes):
+                                dsai_raw = dsai_raw.decode("utf-8")
+                            dsai_parsed = json.loads(dsai_raw) if isinstance(dsai_raw, str) else dsai_raw
+                            await dsai_queue.put(dsai_parsed)
+                except asyncio.CancelledError:
+                    break
+                except Exception as dsai_err:
+                    dsai_logger.debug(f"Redis pubsub read loop notice: {dsai_err}")
+                    await asyncio.sleep(0.5)
+
+        dsai_pubsub_task = asyncio.create_task(dsai_redis_listener())
+    except Exception as dsai_rc_err:
+        dsai_logger.debug(f"Redis Pub/Sub setup skipped or unavailable: {dsai_rc_err}")
+        dsai_pubsub = None
+
     async def dsai_event_generator():
         dsai_yielded_count = 0
+        dsai_seen_ids = set()
         try:
             # Send initial keepalive ping
             yield f": connected\n\n"
@@ -378,6 +458,14 @@ async def dsai_stream_alerts(
                     dsai_alert_data = await asyncio.wait_for(dsai_queue.get(), timeout=15.0)
                     # Filter by tenant
                     if dsai_alert_data.get("tenant_id") == dsai_tenant_id:
+                        dsai_alert_pk = dsai_alert_data.get("alert_id") or dsai_alert_data.get("id")
+                        if dsai_alert_pk is not None:
+                            if dsai_alert_pk in dsai_seen_ids:
+                                continue
+                            dsai_seen_ids.add(dsai_alert_pk)
+                            if len(dsai_seen_ids) > 500:
+                                dsai_seen_ids.pop()
+
                         dsai_json_str = json.dumps(dsai_alert_data)
                         yield f"data: {dsai_json_str}\n\n"
                         dsai_yielded_count += 1
@@ -387,6 +475,18 @@ async def dsai_stream_alerts(
                     # Heartbeat comment to keep connection alive
                     yield f": heartbeat\n\n"
         finally:
+            dsai_stop_event.set()
+            if dsai_pubsub_task and not dsai_pubsub_task.done():
+                dsai_pubsub_task.cancel()
+                try:
+                    await dsai_pubsub_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if dsai_pubsub:
+                try:
+                    await asyncio.to_thread(dsai_pubsub.close)
+                except Exception:
+                    pass
             dsai_unregister_sse_subscriber(dsai_queue)
 
     return StreamingResponse(
@@ -407,10 +507,11 @@ async def dsai_stream_alerts(
 )
 def dsai_acknowledge_alert(
     dsai_alert_id: int,
-    dsai_user: Dict[str, Any] = Depends(require_auth)
+    dsai_user: Dict[str, Any] = Depends(dsai_require_alerts_acknowledge)
 ):
     """
     Acknowledge an alert and record audit trail with user and timestamp (WL-32, WL-33).
+    Gated by alerts:acknowledge RBAC scope (Plan item 47).
     """
     dsai_tenant_id = str(dsai_user.get("tenant_id") or "default")
     dsai_user_id = str(dsai_user.get("sub") or dsai_user.get("username") or "operator")

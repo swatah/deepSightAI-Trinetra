@@ -10,8 +10,9 @@ from typing import Optional, Dict, Any, List, Tuple
 
 from deepSightAI.Trinetra.Shared.LoggingSetup import dsai_get_logger
 from deepSightAI.Trinetra.Shared.Errors import StorageError, StreamingError
-from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer
+from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer, Message
 from deepSightAI.Trinetra.Shared.Streaming.Producer import StreamProducer
+from deepSightAI.Trinetra.Shared.Streaming.RedisClient import create_redis_client
 from deepSightAI.Trinetra.Shared.Streaming.Schema import ObjectDetectedEvent, WatchlistAlertEvent
 from deepSightAI.Trinetra.Shared.Repositories.WatchlistRepository import AlertRepository
 from deepSightAI.Trinetra.WatchlistMatcherService.dsai_cache import WatchlistCache, dsai_get_watchlist_cache, WatchlistEntryCacheItem
@@ -41,12 +42,26 @@ def dsai_unregister_sse_subscriber(dsai_queue: asyncio.Queue):
 
 
 def dsai_broadcast_alert_sse(dsai_alert_dict: Dict[str, Any]):
-    """Broadcast an alert dictionary to all active SSE subscribers."""
+    """
+    Broadcast an alert dictionary to all active SSE subscribers (WL-32).
+    Dispatches both locally to in-process subscribers and across processes via Redis Pub/Sub.
+    """
+    # 1. Local in-process broadcast
     for dsai_sub in list(_dsai_sse_subscribers):
         try:
             dsai_sub.put_nowait(dsai_alert_dict)
         except Exception:
             pass
+
+    # 2. Cross-process Redis Pub/Sub broadcast
+    try:
+        dsai_redis = create_redis_client()
+        dsai_tenant = dsai_alert_dict.get("tenant_id") or "default"
+        dsai_payload_str = json.dumps(dsai_alert_dict)
+        dsai_redis.publish(f"channel:alerts:{dsai_tenant}", dsai_payload_str)
+        dsai_redis.publish("channel:alerts:broadcast", dsai_payload_str)
+    except Exception as dsai_redis_err:
+        dsai_logger.debug(f"Redis Pub/Sub alert broadcast omitted/failed: {dsai_redis_err}")
 
 
 class WatchlistMatcherConsumer:
@@ -78,15 +93,24 @@ class WatchlistMatcherConsumer:
         self.dsai_producer = dsai_producer
         self.dsai_consumer = dsai_consumer
 
+        # Bounded retries & Dead-Letter Queue (REL-57)
+        self.dsai_max_retries = int(
+            self.dsai_config.get("max_retries") or os.getenv("MAX_MESSAGE_RETRIES", "3")
+        )
+        self.dsai_dlq_stream = (
+            self.dsai_config.get("dlq_stream") or os.getenv("DLQ_STREAM", "events:dlq")
+        )
+        self.dsai_retry_counts: Dict[str, int] = {}
+
     def dsai_ensure_streams(self):
         """Ensure StreamConsumer and StreamProducer are initialized."""
         if self.dsai_consumer is None:
             try:
                 self.dsai_consumer = StreamConsumer(
-                    stream_name=self.dsai_stream_name,
                     group_name=self.dsai_group_name,
-                    consumer_name=self.dsai_consumer_name
+                    consumer_id=self.dsai_consumer_name
                 )
+                self.dsai_consumer.ensure_group(self.dsai_stream_name)
             except Exception as dsai_e:
                 dsai_logger.warning(f"Could not connect Redis consumer: {dsai_e}")
                 self.dsai_consumer = None
@@ -97,6 +121,51 @@ class WatchlistMatcherConsumer:
             except Exception as dsai_e:
                 dsai_logger.warning(f"Could not connect Redis producer: {dsai_e}")
                 self.dsai_producer = None
+
+    def dsai_ack_message(self, dsai_msg_id: str):
+        """Acknowledge message cleanly, handling both real StreamConsumer and test mocks."""
+        if self.dsai_consumer is None:
+            return
+        try:
+            self.dsai_consumer.ack(self.dsai_stream_name, dsai_msg_id)
+        except TypeError:
+            try:
+                self.dsai_consumer.ack(dsai_msg_id)
+            except Exception as dsai_ack_err:
+                dsai_logger.error(f"Failed to ack message {dsai_msg_id}: {dsai_ack_err}")
+        except Exception as dsai_ack_err:
+            dsai_logger.error(f"Failed to ack message {dsai_msg_id}: {dsai_ack_err}")
+
+    def dsai_read_messages(self, dsai_count: int = 10) -> List[Any]:
+        """Read pending unacknowledged messages first (PEL), then new messages."""
+        if self.dsai_consumer is None:
+            return []
+
+        dsai_messages = []
+        # Check consumer PEL for unacknowledged messages needing retry
+        if hasattr(self.dsai_consumer, "client") and hasattr(self.dsai_consumer, "group_name") and hasattr(self.dsai_consumer, "consumer_id"):
+            try:
+                dsai_res = self.dsai_consumer.client.xreadgroup(
+                    groupname=self.dsai_consumer.group_name,
+                    consumername=self.dsai_consumer.consumer_id,
+                    streams={self.dsai_stream_name: "0"},
+                    count=dsai_count
+                )
+                if dsai_res:
+                    for dsai_stream, dsai_msg_list in dsai_res:
+                        for dsai_mid, dsai_data in dsai_msg_list:
+                            dsai_messages.append(Message(stream=dsai_stream, msg_id=dsai_mid, data=dsai_data))
+            except Exception as dsai_pel_err:
+                dsai_logger.debug(f"PEL read check error: {dsai_pel_err}")
+
+        # If no pending unacknowledged messages, read next messages from stream
+        if not dsai_messages:
+            try:
+                dsai_messages = self.dsai_consumer.read(self.dsai_stream_name, count=dsai_count, block_ms=1000)
+            except TypeError:
+                dsai_messages = self.dsai_consumer.read(count=dsai_count, block_ms=1000)
+
+        return dsai_messages or []
 
     def dsai_process_event(self, dsai_event: ObjectDetectedEvent) -> List[WatchlistAlertEvent]:
         """
@@ -215,38 +284,65 @@ class WatchlistMatcherConsumer:
         """
         Fetch and process a batch of ObjectDetectedEvent messages.
         Acks only after durable commit (WL-31).
+        Implements bounded retries and DLQ routing on failures (REL-57).
         """
         self.dsai_ensure_streams()
         if self.dsai_consumer is None:
             return 0
 
         try:
-            dsai_messages = self.dsai_consumer.read(count=dsai_count, block_ms=1000)
+            dsai_messages = self.dsai_read_messages(dsai_count=dsai_count)
         except Exception as dsai_read_err:
             dsai_logger.error(f"Error reading from stream {self.dsai_stream_name}: {dsai_read_err}")
             return 0
 
         dsai_processed = 0
         for dsai_msg in dsai_messages:
+            dsai_payload = None
             try:
                 # Parse event payload
                 dsai_payload = dsai_msg.data
                 if isinstance(dsai_payload, str):
                     dsai_payload = json.loads(dsai_payload)
+                elif isinstance(dsai_payload, dict) and "event" in dsai_payload and isinstance(dsai_payload["event"], str):
+                    dsai_payload = json.loads(dsai_payload["event"])
 
                 dsai_obj_event = ObjectDetectedEvent(**dsai_payload)
                 # Process match logic and durable commit
                 self.dsai_process_event(dsai_obj_event)
 
                 # ACK message only upon durable commit (WL-31)
-                self.dsai_consumer.ack(dsai_msg.id)
+                self.dsai_ack_message(dsai_msg.id)
+                self.dsai_retry_counts.pop(dsai_msg.id, None)
                 dsai_processed += 1
 
             except Exception as dsai_proc_err:
+                self.dsai_retry_counts[dsai_msg.id] = self.dsai_retry_counts.get(dsai_msg.id, 0) + 1
+                dsai_attempts = self.dsai_retry_counts[dsai_msg.id]
                 dsai_logger.error(
-                    f"Processing failed for message {dsai_msg.id}; message NOT acked: {dsai_proc_err}"
+                    f"Processing failed for message {dsai_msg.id} "
+                    f"(attempt {dsai_attempts}/{self.dsai_max_retries}): {dsai_proc_err}"
                 )
-                # Bounded retry / leave in stream for redelivery
+
+                if dsai_attempts >= self.dsai_max_retries:
+                    dsai_logger.error(
+                        f"Message {dsai_msg.id} exceeded {self.dsai_max_retries} retries; "
+                        f"routing to DLQ '{self.dsai_dlq_stream}' and acknowledging"
+                    )
+                    if self.dsai_producer is not None:
+                        try:
+                            self.dsai_producer.publish(self.dsai_dlq_stream, {
+                                "source_stream": self.dsai_stream_name,
+                                "message_id": dsai_msg.id,
+                                "event": dsai_payload if dsai_payload is not None else getattr(dsai_msg, "data", None),
+                                "error": str(dsai_proc_err),
+                            })
+                        except Exception as dsai_dlq_err:
+                            dsai_logger.error(f"Failed publishing to DLQ: {dsai_dlq_err}")
+
+                    # Acknowledge to unblock head-of-line poison pill
+                    self.dsai_ack_message(dsai_msg.id)
+                    self.dsai_retry_counts.pop(dsai_msg.id, None)
 
         return dsai_processed
 

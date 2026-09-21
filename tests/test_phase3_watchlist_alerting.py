@@ -179,6 +179,38 @@ class TestDM7bPostgresSchemaAndRepository:
         # 5. List unacknowledged is now empty
         assert len(dsai_alert_repo_a.dsai_list_unacknowledged()) == 0
 
+    def test_dsai_alert_repository_idempotent_deduplication(self, test_db_session, monkeypatch):
+        """Verify AlertRepository deduplicates alerts for the same (tenant, entry_id, video_object_pk)."""
+        dsai_alert_repo = AlertRepository("tenant_dedup")
+        monkeypatch.setattr(dsai_alert_repo, "Session", test_db_session)
+
+        # 1. First alert insertion
+        dsai_alert_1 = dsai_alert_repo.dsai_create(
+            watchlist_entry_id=42,
+            video_object_pk="obj_dup_999",
+            camera_id="cam_gate_1",
+            match_score=0.85,
+            crop_path="crops/tenant_dedup/crop_1.jpg"
+        )
+        assert dsai_alert_1.id is not None
+        assert dsai_alert_1.match_score == 0.85
+
+        # 2. Duplicate alert insertion on consumer retry / redelivery
+        dsai_alert_2 = dsai_alert_repo.dsai_create(
+            watchlist_entry_id=42,
+            video_object_pk="obj_dup_999",
+            camera_id="cam_gate_1",
+            match_score=0.95,
+            crop_path="crops/tenant_dedup/crop_1.jpg"
+        )
+        # Should return the same record ID without inserting a second row
+        assert dsai_alert_2.id == dsai_alert_1.id
+        assert dsai_alert_2.match_score == 0.95
+
+        # Verify only 1 row exists in database for this tenant
+        dsai_all = dsai_alert_repo.dsai_poll_alerts(since_id=0)
+        assert len(dsai_all) == 1
+
 
 # =====================================================================
 # 2. WL-28: PLATE MATCH LOGIC (EXACT & FUZZY)
@@ -532,6 +564,83 @@ class TestWL26andWL31WatchlistMatcherConsumer:
         with pytest.raises(StorageError):
             dsai_consumer.dsai_process_event(dsai_event)
 
+    def test_dsai_consumer_bounded_retry_and_dlq(self):
+        """Consumer tracks retry counts per message and routes to DLQ upon reaching max_retries (REL-57)."""
+        dsai_mock_consumer = MagicMock()
+        dsai_mock_producer = MagicMock()
+
+        dsai_msg = MagicMock()
+        dsai_msg.id = "1690000000002-0"
+        dsai_msg.data = {
+            "video_object_pk": "obj_bad_poison",
+            "tenant_id": "tenant_retry_test",
+            "camera_id": "cam_retry",
+            "video_id": "vid_retry",
+            "frame_timestamp": 5.0,
+            "frame_path": "f.jpg",
+            "object_class": "vehicle",
+            "confidence": 0.9,
+            "has_plate_read": True,
+            "plate_number": "MH12AB1234"
+        }
+        dsai_mock_consumer.read.return_value = [dsai_msg]
+
+        dsai_consumer = WatchlistMatcherConsumer(
+            dsai_config={"max_retries": 2, "dlq_stream": "events:dlq"},
+            dsai_producer=dsai_mock_producer,
+            dsai_consumer=dsai_mock_consumer
+        )
+
+        # Mock process_event to fail
+        dsai_consumer.dsai_process_event = MagicMock(side_effect=Exception("Database lock timeout"))
+
+        # Batch 1: attempt 1 / 2
+        dsai_consumer.dsai_consume_batch(dsai_count=1)
+        assert dsai_consumer.dsai_retry_counts.get("1690000000002-0") == 1
+        assert not dsai_mock_producer.publish.called
+        assert not dsai_mock_consumer.ack.called
+
+        # Batch 2: attempt 2 / 2 (reaches max_retries -> DLQ + ack)
+        dsai_consumer.dsai_consume_batch(dsai_count=1)
+        assert "1690000000002-0" not in dsai_consumer.dsai_retry_counts
+        assert dsai_mock_producer.publish.called
+        dsai_pub_stream, dsai_pub_payload = dsai_mock_producer.publish.call_args[0]
+        assert dsai_pub_stream == "events:dlq"
+        assert dsai_pub_payload["message_id"] == "1690000000002-0"
+        assert "Database lock timeout" in dsai_pub_payload["error"]
+        assert dsai_mock_consumer.ack.called
+
+    def test_dsai_consumer_retry_under_threshold_leaves_unacked(self):
+        """Failures under max_retries are not sent to DLQ and remain unacknowledged (REL-57)."""
+        dsai_mock_consumer = MagicMock()
+        dsai_mock_producer = MagicMock()
+
+        dsai_msg = MagicMock()
+        dsai_msg.id = "1690000000003-0"
+        dsai_msg.data = {
+            "video_object_pk": "obj_transient_err",
+            "tenant_id": "tenant_retry_test",
+            "camera_id": "cam_transient",
+            "video_id": "vid_transient",
+            "frame_timestamp": 2.0,
+            "frame_path": "f.jpg",
+            "object_class": "person",
+            "confidence": 0.8
+        }
+        dsai_mock_consumer.read.return_value = [dsai_msg]
+
+        dsai_consumer = WatchlistMatcherConsumer(
+            dsai_config={"max_retries": 3, "dlq_stream": "events:dlq"},
+            dsai_producer=dsai_mock_producer,
+            dsai_consumer=dsai_mock_consumer
+        )
+        dsai_consumer.dsai_process_event = MagicMock(side_effect=Exception("Transient error"))
+
+        dsai_consumer.dsai_consume_batch(dsai_count=1)
+        assert dsai_consumer.dsai_retry_counts.get("1690000000003-0") == 1
+        assert not dsai_mock_producer.publish.called
+        assert not dsai_mock_consumer.ack.called
+
 
 # =====================================================================
 # 7. WL-27, WL-32, WL-33: WATCHLIST & ALERTS REST API
@@ -630,7 +739,7 @@ class TestWL27andWL32WatchlistAPI:
             "sub": "operator_sarah",
             "tenant_id": "tenant_alert_test",
             "roles": [],
-            "permissions": ["alerts:read", "alerts:write"]
+            "permissions": ["alerts:read", "alerts:acknowledge"]
         }
 
         # Seed an alert via AlertRepository
@@ -682,6 +791,88 @@ class TestWL27andWL32WatchlistAPI:
         assert ": connected" in dsai_stream_resp.text
 
         dsai_matcher_app.dependency_overrides.clear()
+
+    def test_dsai_watchlist_read_without_permission_returns_403(self, dsai_client):
+        """User missing 'watchlist:read' permission receives 403 on GET /watchlist (Plan item 47)."""
+        from deepSightAI.Trinetra.Shared.Middleware import require_auth
+        dsai_matcher_app.dependency_overrides[require_auth] = lambda: {
+            "sub": "alert_only_user",
+            "tenant_id": "tenant_rbac_test",
+            "roles": [],
+            "permissions": ["alerts:read"]
+        }
+
+        dsai_resp = dsai_client.get("/watchlist")
+        assert dsai_resp.status_code == 403
+        assert "watchlist:read" in dsai_resp.json()["detail"]
+
+        dsai_get_resp = dsai_client.get("/watchlist/1")
+        assert dsai_get_resp.status_code == 403
+
+        dsai_matcher_app.dependency_overrides.clear()
+
+    def test_dsai_alerts_read_without_permission_returns_403(self, dsai_client):
+        """User missing 'alerts:read' permission receives 403 on alerts polling and stream (Plan item 47)."""
+        from deepSightAI.Trinetra.Shared.Middleware import require_auth
+        dsai_matcher_app.dependency_overrides[require_auth] = lambda: {
+            "sub": "watchlist_only_user",
+            "tenant_id": "tenant_rbac_test",
+            "roles": [],
+            "permissions": ["watchlist:read"]
+        }
+
+        dsai_poll_resp = dsai_client.get("/alerts/poll")
+        assert dsai_poll_resp.status_code == 403
+        assert "alerts:read" in dsai_poll_resp.json()["detail"]
+
+        dsai_stream_resp = dsai_client.get("/alerts/stream")
+        assert dsai_stream_resp.status_code == 403
+        assert "alerts:read" in dsai_stream_resp.json()["detail"]
+
+        dsai_matcher_app.dependency_overrides.clear()
+
+    def test_dsai_alerts_acknowledge_without_permission_returns_403(self, dsai_client):
+        """User missing 'alerts:acknowledge' permission receives 403 on acknowledge (Plan item 47)."""
+        from deepSightAI.Trinetra.Shared.Middleware import require_auth
+        dsai_matcher_app.dependency_overrides[require_auth] = lambda: {
+            "sub": "viewer_user",
+            "tenant_id": "tenant_rbac_test",
+            "roles": [],
+            "permissions": ["alerts:read"]
+        }
+
+        dsai_ack_resp = dsai_client.patch("/alerts/1/acknowledge")
+        assert dsai_ack_resp.status_code == 403
+        assert "alerts:acknowledge" in dsai_ack_resp.json()["detail"]
+
+        dsai_matcher_app.dependency_overrides.clear()
+
+    def test_dsai_sse_redis_pubsub_broadcast(self, monkeypatch):
+        """Verify dsai_broadcast_alert_sse publishes to Redis Pub/Sub channels (WL-32 cross-process)."""
+        from deepSightAI.Trinetra.WatchlistMatcherService.dsai_consumer import dsai_broadcast_alert_sse
+
+        dsai_mock_redis = MagicMock()
+        monkeypatch.setattr(
+            "deepSightAI.Trinetra.WatchlistMatcherService.dsai_consumer.create_redis_client",
+            lambda: dsai_mock_redis
+        )
+
+        dsai_alert_payload = {
+            "alert_id": 77,
+            "tenant_id": "tenant_redis_sse",
+            "watchlist_entry_id": 10,
+            "video_object_pk": "pk_cross_proc_1",
+            "camera_id": "cam_cross_1",
+            "match_score": 0.99
+        }
+
+        dsai_broadcast_alert_sse(dsai_alert_payload)
+
+        # Verified Redis Pub/Sub publish calls
+        assert dsai_mock_redis.publish.call_count == 2
+        dsai_calls = [c[0] for c in dsai_mock_redis.publish.call_args_list]
+        assert ("channel:alerts:tenant_redis_sse", json.dumps(dsai_alert_payload)) in dsai_calls
+        assert ("channel:alerts:broadcast", json.dumps(dsai_alert_payload)) in dsai_calls
 
 
 

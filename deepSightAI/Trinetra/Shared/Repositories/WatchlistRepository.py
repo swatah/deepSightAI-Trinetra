@@ -9,7 +9,8 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 import json
 import re
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, and_, desc
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, and_, desc, UniqueConstraint
+from sqlalchemy.exc import IntegrityError
 from ..DB import Base
 from .Base import BaseRepository
 
@@ -67,6 +68,9 @@ class Alert(Base):
         created_at: Record creation timestamp
     """
     __tablename__ = "alerts"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "watchlist_entry_id", "video_object_pk", name="uq_alerts_tenant_wl_pk"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     tenant_id = Column(String(255), nullable=False, index=True)
@@ -277,17 +281,53 @@ class AlertRepository(BaseRepository[Alert]):
         match_score: float,
         crop_path: Optional[str] = None
     ) -> Alert:
-        """Record a newly detected watchlist alert scoped to tenant."""
-        dsai_alert = Alert(
-            tenant_id=self.tenant_id,
-            watchlist_entry_id=watchlist_entry_id,
-            video_object_pk=video_object_pk,
-            camera_id=camera_id,
-            match_score=float(match_score),
-            crop_path=crop_path,
-            acknowledged=False
-        )
-        return self._add(dsai_alert)
+        """
+        Record a newly detected watchlist alert scoped to tenant.
+        Idempotent: deduplicates alerts for the same (tenant_id, watchlist_entry_id, video_object_pk).
+        """
+        with self.Session() as dsai_session:
+            # Check for existing alert for this detection and watchlist entry
+            dsai_existing = dsai_session.query(Alert).filter(
+                and_(
+                    Alert.tenant_id == self.tenant_id,
+                    Alert.watchlist_entry_id == watchlist_entry_id,
+                    Alert.video_object_pk == video_object_pk
+                )
+            ).first()
+            if dsai_existing:
+                # Update match_score if newer score is higher
+                if float(match_score) > dsai_existing.match_score:
+                    dsai_existing.match_score = float(match_score)
+                    dsai_session.commit()
+                    dsai_session.refresh(dsai_existing)
+                return dsai_existing
+
+            dsai_alert = Alert(
+                tenant_id=self.tenant_id,
+                watchlist_entry_id=watchlist_entry_id,
+                video_object_pk=video_object_pk,
+                camera_id=camera_id,
+                match_score=float(match_score),
+                crop_path=crop_path,
+                acknowledged=False
+            )
+            try:
+                dsai_session.add(dsai_alert)
+                dsai_session.commit()
+                dsai_session.refresh(dsai_alert)
+                return dsai_alert
+            except IntegrityError:
+                dsai_session.rollback()
+                dsai_conflict = dsai_session.query(Alert).filter(
+                    and_(
+                        Alert.tenant_id == self.tenant_id,
+                        Alert.watchlist_entry_id == watchlist_entry_id,
+                        Alert.video_object_pk == video_object_pk
+                    )
+                ).first()
+                if dsai_conflict:
+                    return dsai_conflict
+                raise
 
     create = dsai_create
 
