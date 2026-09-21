@@ -32,3 +32,9 @@ dist/
 *.env
 !.env.example
 
+# Next.js UI Frontend
+deepSightAI/Trinetra/UI/node_modules/
+deepSightAI/Trinetra/UI/.next/
+deepSightAI/Trinetra/UI/out/
+
+

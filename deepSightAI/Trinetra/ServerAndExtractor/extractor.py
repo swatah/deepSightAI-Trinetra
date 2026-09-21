@@ -67,6 +67,8 @@ _job_slots = threading.Semaphore(EXTRACTOR_THREADS)
 # stream_id -> threading.Event(), one per active RTSP stream so each can be
 # stopped independently (a single shared event would stop every stream at once).
 _active_rtsp_streams = {}
+# camera_id -> stream_id mapping for stopping streams by camera identifier
+_active_camera_streams = {}
 # RLock, not Lock: /extract_stream holds this while calling _rtsp_effective_limit(),
 # which itself acquires it via _rtsp_is_degraded() -- a plain Lock would deadlock
 # on that reentrant acquisition from the same thread.
@@ -502,6 +504,8 @@ def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threadi
     finally:
         with _rtsp_lock:
             _active_rtsp_streams.pop(stream_id, None)
+            if cid in _active_camera_streams and _active_camera_streams[cid] == stream_id:
+                _active_camera_streams.pop(cid, None)
         print(f"[{EXTRACTOR_ID}] RTSP job for {rtsp_url} has concluded.")
 
 # --- FASTAPI APPLICATION SETUP ---
@@ -598,6 +602,8 @@ def extract_stream(request: RtspJobRequest, background_tasks: BackgroundTasks, h
         stream_id = f"{EXTRACTOR_ID}-rtsp-{uuid.uuid4().hex[:8]}"
         stream_event = threading.Event()
         _active_rtsp_streams[stream_id] = stream_event
+        if request.camera_id:
+            _active_camera_streams[request.camera_id] = stream_id
 
     background_tasks.add_task(
         run_rtsp_extraction_job,
@@ -623,6 +629,29 @@ def rtsp_status():
         "effective_limit": RTSP_SOFT_LIMIT if degraded else RTSP_HARD_LIMIT,
         "degraded": degraded,
     }
+
+
+@app.post("/stop_stream/{stream_id}")
+def dsai_stop_stream(stream_id: str):
+    """Endpoint to stop an active RTSP stream by stream_id."""
+    with _rtsp_lock:
+        dsai_stream_event = _active_rtsp_streams.get(stream_id)
+        if not dsai_stream_event:
+            raise HTTPException(status_code=404, detail=f"Active stream '{stream_id}' not found on this extractor.")
+        dsai_stream_event.set()
+    return {"message": f"Stop signal dispatched to stream '{stream_id}'.", "stream_id": stream_id}
+
+
+@app.post("/stop_camera/{camera_id}")
+def dsai_stop_camera(camera_id: str):
+    """Endpoint to stop an active RTSP stream by camera_id."""
+    with _rtsp_lock:
+        dsai_stream_id = _active_camera_streams.get(camera_id)
+        if not dsai_stream_id or dsai_stream_id not in _active_rtsp_streams:
+            raise HTTPException(status_code=404, detail=f"Active stream for camera '{camera_id}' not found on this extractor.")
+        dsai_stream_event = _active_rtsp_streams[dsai_stream_id]
+        dsai_stream_event.set()
+    return {"message": f"Stop signal dispatched for camera '{camera_id}'.", "camera_id": camera_id, "stream_id": dsai_stream_id}
 
 
 # --- HEALTH & READINESS PROBES (REL-63) ---

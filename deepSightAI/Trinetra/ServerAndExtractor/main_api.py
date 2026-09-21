@@ -44,6 +44,17 @@ class RtspSourceRequest(BaseModel):
             raise ValueError("camera_id is required at ingestion")
         return str(v).strip()
 
+class UploadRequestUrlModel(BaseModel):
+    filename: str
+    content_type: str = "video/mp4"
+    tenant_id: str = "default"
+    camera_id: Optional[str] = None
+
+class RtspStopRequest(BaseModel):
+    camera_id: Optional[str] = None
+    stream_id: Optional[str] = None
+    tenant_id: str = "default"
+
 # --- AUTH DEPENDENCY ---
 from deepSightAI.Trinetra.Shared.Middleware import require_auth, RequestIDMiddleware
 from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
@@ -216,6 +227,111 @@ async def process_rtsp_stream(request: RtspSourceRequest, http_request: Request)
             raise HTTPException(status_code=503, detail="Chosen extractor rejected the stream (capacity changed).")
         except httpx.RequestError as e:
             raise HTTPException(status_code=500, detail=f"Could not connect to a service: {e}")
+
+
+# --- PHASE 0 BACKEND BRIDGES (T0.1.0 / ISSUE #17) ---
+@app.post("/upload/request-url")
+def dsai_request_upload_url(request: UploadRequestUrlModel, http_request: Request):
+    """
+    Generate a presigned PUT URL for direct browser-to-MinIO video upload.
+    Enforces zero-cloud-SDK constraint on frontend (pure browser fetch(PUT)).
+    """
+    enforced_tenant_id = dsai_validate_request_tenant(http_request, request.tenant_id)
+
+    from datetime import timedelta
+    dsai_safe_filename = os.path.basename(request.filename)
+    dsai_timestamp_prefix = int(datetime.utcnow().timestamp())
+    dsai_object_name = f"{enforced_tenant_id}/{dsai_timestamp_prefix}_{dsai_safe_filename}"
+
+    dsai_minio_client = Minio(
+        MINIO_URL.replace("http://", "").replace("https://", ""),
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        secure=False
+    )
+
+    try:
+        if not dsai_minio_client.bucket_exists(VIDEO_BUCKET):
+            dsai_minio_client.make_bucket(VIDEO_BUCKET)
+
+        dsai_presigned_url = dsai_minio_client.presigned_put_object(
+            VIDEO_BUCKET,
+            dsai_object_name,
+            expires=timedelta(minutes=30)
+        )
+        return {
+            "upload_url": dsai_presigned_url,
+            "video_uri": dsai_object_name,
+            "bucket": VIDEO_BUCKET,
+            "tenant_id": enforced_tenant_id,
+            "expires_in_seconds": 1800
+        }
+    except Exception as dsai_err:
+        raise HTTPException(status_code=500, detail=f"Failed to generate presigned upload URL: {dsai_err}")
+
+
+@app.post("/rtsp/stop")
+async def dsai_stop_rtsp_stream(request: RtspStopRequest, http_request: Request):
+    """
+    Stop an active RTSP stream extraction job across registered extractors.
+    Accepts either camera_id or stream_id.
+    """
+    enforced_tenant_id = dsai_validate_request_tenant(http_request, request.tenant_id)
+    if not request.camera_id and not request.stream_id:
+        raise HTTPException(status_code=400, detail="Either camera_id or stream_id is required to stop stream.")
+
+    forward_headers = {}
+    incoming_auth = http_request.headers.get("Authorization")
+    if incoming_auth:
+        forward_headers["Authorization"] = incoming_auth
+
+    async with httpx.AsyncClient(timeout=10.0, headers=forward_headers) as client:
+        try:
+            services_response = await client.get(f"{REGISTRY_URL}/get_all_services")
+            services_response.raise_for_status()
+            extractors = services_response.json().get("extractors", [])
+        except httpx.RequestError as dsai_err:
+            raise HTTPException(status_code=500, detail=f"Could not reach registry: {dsai_err}")
+
+        if not extractors:
+            raise HTTPException(status_code=503, detail="No extractors registered.")
+
+        dsai_stopped = False
+        dsai_details = []
+        for dsai_ext_info in extractors:
+            try:
+                dsai_target_url = None
+                if request.stream_id:
+                    dsai_target_url = f"{dsai_ext_info['extractor_url']}/stop_stream/{request.stream_id}"
+                elif request.camera_id:
+                    dsai_target_url = f"{dsai_ext_info['extractor_url']}/stop_camera/{request.camera_id}"
+
+                if dsai_target_url:
+                    dsai_resp = await client.post(dsai_target_url)
+                    if dsai_resp.status_code == 200:
+                        dsai_stopped = True
+                        dsai_details.append({
+                            "extractor_id": dsai_ext_info.get("extractor_id"),
+                            "status": "stopped",
+                            "response": dsai_resp.json()
+                        })
+            except httpx.HTTPError:
+                continue
+
+        if not dsai_stopped:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Active stream not found on any extractor for camera_id='{request.camera_id}' stream_id='{request.stream_id}'"
+            )
+
+        return {
+            "message": "Stream stop signal sent successfully",
+            "camera_id": request.camera_id,
+            "stream_id": request.stream_id,
+            "tenant_id": enforced_tenant_id,
+            "details": dsai_details
+        }
+
 
 @app.get("/get_rtsp_frames")
 def get_rtsp_frames(bucket_name: str, start_time: datetime, end_time: datetime):

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "deepSightAI"
 version = "1.0.0"
 description = "deepSightAI Trinetra: Multi-Modal Video Search and Live Watchlist Alerting Engine"
-readme = "README.md"
+readme = "oldies/README.md"
 requires-python = ">=3.10"
 authors = [
     {name = "deepSightAI"}
@@ -49,6 +49,11 @@ markers = [
     "security: Security tests",
     "slow: Tests that take > 5s",
 ]
+norecursedirs = [
+    "deepSightAI/Trinetra/UI",
+    "node_modules",
+    ".next",
+]
 filterwarnings = [
     "ignore::DeprecationWarning:.*crypt",
     "ignore::DeprecationWarning:.*argon2",
@@ -60,7 +65,12 @@ branch = true
 source = ["deepSightAI"]
 omit = [
     "tests/*",
+    "deepSightAI/Trinetra/UI/*",
 ]
+
+[tool.mypy]
+python_version = "3.10"
+exclude = ["deepSightAI/Trinetra/UI", "node_modules", ".next"]
 
 [tool.coverage.report]
 exclude_lines = [
