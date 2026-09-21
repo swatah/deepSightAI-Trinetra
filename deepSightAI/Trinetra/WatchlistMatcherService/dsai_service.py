@@ -13,6 +13,10 @@ from deepSightAI.Trinetra.WatchlistMatcherService.dsai_consumer import Watchlist
 from deepSightAI.Trinetra.WatchlistMatcherService.dsai_api import dsai_watchlist_router
 from deepSightAI.Trinetra.WatchlistMatcherService.dsai_cache import dsai_get_watchlist_cache
 
+from deepSightAI.Trinetra.Shared.Middleware import RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+from deepSightAI.Trinetra.Shared.Metrics import dsai_metrics_response
+
 dsai_logger = dsai_get_logger("deepSightAI.Trinetra.WatchlistMatcherService")
 
 app = FastAPI(
@@ -20,6 +24,8 @@ app = FastAPI(
     version="1.0.0",
     description="Real-time live stream watchlist matching and alerting engine (WL-26 to WL-34)."
 )
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 # Include Watchlist and Alerts API routes
 app.include_router(dsai_watchlist_router)
@@ -78,8 +84,27 @@ def dsai_get_service() -> WatchlistMatcherService:
 
 @app.get("/health")
 def dsai_health():
-    """Service health check endpoint."""
+    """Service health check endpoint (REL-63)."""
     return {"status": "healthy", "service": "WatchlistMatcherService"}
+
+
+@app.get("/ready")
+def dsai_ready():
+    """Service readiness check endpoint (REL-63)."""
+    svc = dsai_get_service()
+    is_ready = bool(svc.dsai_worker_thread and svc.dsai_worker_thread.is_alive())
+    return {
+        "status": "ready" if is_ready else "starting",
+        "service": "WatchlistMatcherService",
+        "worker_alive": is_ready
+    }
+
+
+@app.get("/metrics")
+def dsai_metrics():
+    """Service scrapeable metrics endpoint (REL-64)."""
+    return dsai_metrics_response()
+
 
 
 @app.on_event("startup")

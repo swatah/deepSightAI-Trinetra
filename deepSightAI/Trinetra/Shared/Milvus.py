@@ -32,37 +32,47 @@ def connect_milvus_with_retry(
     port: Optional[str] = None,
     max_retries: Optional[int] = None,
     initial_delay: Optional[float] = None,
-    backoff_factor: float = 2.0
-):
+    backoff_factor: float = 2.0,
+    dsai_max_attempts: Optional[int] = None,
+    dsai_initial_wait: Optional[float] = None,
+    **kwargs,
+) -> bool:
     """Connect to Milvus with exponential backoff retry."""
     host = host or os.getenv("MILVUS_HOST", "milvus-standalone")
     port = port or os.getenv("MILVUS_PORT", "19530")
 
-    if max_retries is None:
-        max_retries = int(os.getenv("MILVUS_MAX_RETRIES", "1" if "pytest" in sys.modules else "5"))
-    if initial_delay is None:
-        initial_delay = float(os.getenv("MILVUS_INITIAL_DELAY", "0.05" if "pytest" in sys.modules else "1.0"))
+    effective_retries = dsai_max_attempts if dsai_max_attempts is not None else max_retries
+    if effective_retries is None:
+        effective_retries = int(os.getenv("MILVUS_MAX_RETRIES", "1" if "pytest" in sys.modules else "5"))
+
+    effective_delay = dsai_initial_wait if dsai_initial_wait is not None else initial_delay
+    if effective_delay is None:
+        effective_delay = float(os.getenv("MILVUS_INITIAL_DELAY", "0.05" if "pytest" in sys.modules else "1.0"))
 
     if connections.has_connection(alias):
-        return
+        return True
 
-    delay = initial_delay
+    delay = effective_delay
     last_err = None
-    for attempt in range(1, max_retries + 1):
+    for attempt in range(1, effective_retries + 1):
         try:
-            connections.connect(alias=alias, host=host, port=port)
+            connections.connect(alias=alias, host=host, port=port, **kwargs)
             logger.info(f"Connected to Milvus at {host}:{port} (alias={alias})")
-            return
+            return True
         except Exception as e:
             last_err = e
             logger.warning(
-                f"Failed to connect to Milvus at {host}:{port} (attempt {attempt}/{max_retries}): {e}"
+                f"Failed to connect to Milvus at {host}:{port} (attempt {attempt}/{effective_retries}): {e}"
             )
-            if attempt < max_retries:
+            if attempt < effective_retries:
                 time.sleep(delay)
                 delay *= backoff_factor
 
-    raise RuntimeError(f"Could not connect to Milvus after {max_retries} attempts: {last_err}")
+    raise RuntimeError(f"Could not connect to Milvus after {effective_retries} attempts: {last_err}")
+
+
+dsai_connect_milvus_with_retry = connect_milvus_with_retry
+
 
 
 def get_collection_name(tenant_id: str) -> str:

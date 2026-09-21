@@ -16,6 +16,7 @@ class IngestJobStarted(BaseModel):
     source_type: str  # "file", "rtsp", "hls", etc.
     source_identifier: str  # e.g., MinIO key for files, RTSP URL for streams
     tenant_id: str = Field(default="default")  # optional, for multi-tenancy
+    correlation_id: Optional[str] = None
     timestamp: datetime
 
     @field_validator('source_type')
@@ -34,6 +35,7 @@ class IngestJobCompleted(BaseModel):
     video_id: str  # The canonical ID for this video/stream
     frame_count: int = Field(ge=0)
     duration_seconds: float = Field(ge=0)
+    correlation_id: Optional[str] = None
     timestamp: datetime
 
 
@@ -111,6 +113,7 @@ class ObjectDetectedEvent(BaseModel):
     plate_number: Optional[str] = None
     plate_candidate_id: Optional[str] = None
     reid_embedding: Optional[List[float]] = None
+    correlation_id: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -132,5 +135,23 @@ class WatchlistAlertEvent(BaseModel):
     priority: str = "medium"
     entry_type: Optional[str] = None
     matched_entity: Optional[str] = None
+    correlation_id: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class DeadLetterQueueEvent(BaseModel):
+    """
+    Event emitted when a message fails processing and exceeds max retries (REL-57).
+    Published to dead-letter queue stream (e.g. 'events:dlq').
+    """
+    event_type: Literal["events.dlq"] = "events.dlq"
+    source_stream: str
+    message_id: str
+    event_payload: Optional[dict] = None
+    error: str
+    retry_count: int = Field(default=0, ge=0)
+    correlation_id: Optional[str] = None
+    tenant_id: Optional[str] = Field(default="default")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
 

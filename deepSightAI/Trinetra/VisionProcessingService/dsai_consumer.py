@@ -17,8 +17,13 @@ from typing import Optional, Dict, Any, List
 import numpy as np
 
 from deepSightAI.Trinetra.Shared.LoggingSetup import dsai_get_logger
-from deepSightAI.Trinetra.Shared.Errors import ModelInferenceError, MilvusError, StorageError
-from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer
+from deepSightAI.Trinetra.Shared.Errors import (
+    ModelInferenceError,
+    MilvusError,
+    StorageError,
+    StreamingError,
+)
+from deepSightAI.Trinetra.Shared.Streaming.Consumer import StreamConsumer, Message
 from deepSightAI.Trinetra.Shared.Streaming.Producer import StreamProducer
 from deepSightAI.Trinetra.Shared.Streaming.Schema import FrameReadyEvent, ObjectDetectedEvent
 from deepSightAI.Trinetra.Shared.Milvus import (
@@ -64,6 +69,19 @@ class VisionProcessingConsumer:
             consumer_id=self.dsai_consumer_id,
             redis_client=None
         )
+
+        from deepSightAI.Trinetra.Shared.Streaming.dsai_resilient_consumer import ResilientStreamConsumer
+        self.dsai_resilient_consumer = ResilientStreamConsumer(
+            group_name=self.dsai_group_name,
+            consumer_name=self.dsai_consumer_id,
+            stream_name=self.dsai_stream_name,
+            dlq_stream=self.dsai_dlq_stream,
+            max_retries=self.max_message_retries,
+            redis_client=getattr(self.consumer, "client", None),
+            producer=self.dsai_producer,
+            ack_fn=lambda mid: self.consumer.ack(self.dsai_stream_name, mid) if hasattr(self.consumer, "ack") else None,
+        )
+        self.message_retry_counts = self.dsai_resilient_consumer.dsai_retry_counts
 
         # Initialize plugin loader
         self.plugin_loader = PluginLoader(self.dsai_config)
@@ -355,52 +373,106 @@ class VisionProcessingConsumer:
 
         return dsai_emitted_events
 
+    def dsai_reclaim_idle_messages(self, dsai_min_idle_ms: int = 60000, dsai_count: int = 10) -> List[Any]:
+        """Automatic idle-message reclaim sweep using XPENDING / XCLAIM (REL-58)."""
+        try:
+            from deepSightAI.Trinetra.Shared.Streaming.ResilientConsumer import ResilientStreamConsumer
+            r_consumer = ResilientStreamConsumer(
+                dsai_group_name=self.dsai_group_name,
+                dsai_stream_name=self.dsai_stream_name,
+                dsai_consumer_id=self.dsai_consumer_id,
+                dsai_redis_client=getattr(self.consumer, "client", None),
+                dsai_producer=self.dsai_producer,
+            )
+            return r_consumer.reclaim_idle_messages(dsai_min_idle_ms=dsai_min_idle_ms, dsai_count=dsai_count)
+        except Exception as e:
+            logger.error(f"Error reclaiming idle messages in VPS: {e}")
+            return []
+
+    reclaim_idle_messages = dsai_reclaim_idle_messages
+
+    def dsai_read_messages(self, dsai_count: int = 10, dsai_block_ms: int = 2000) -> List[Any]:
+        """
+        Read pending unacknowledged messages first (PEL '0'), then new messages ('>').
+        Ensures retries are processed and poison pills can reach max_message_retries and route to DLQ (REL-57).
+        """
+        if self.consumer is None:
+            return []
+
+        dsai_messages = []
+        dsai_client = getattr(self.consumer, "client", None)
+        if dsai_client and hasattr(self.consumer, "group_name") and hasattr(self.consumer, "consumer_id"):
+            try:
+                dsai_res = dsai_client.xreadgroup(
+                    groupname=self.consumer.group_name,
+                    consumername=self.consumer.consumer_id,
+                    streams={self.dsai_stream_name: "0"},
+                    count=dsai_count
+                )
+                if dsai_res and isinstance(dsai_res, (list, tuple)):
+                    for dsai_stream, dsai_msg_list in dsai_res:
+                        if isinstance(dsai_msg_list, (list, tuple)):
+                            for dsai_mid, dsai_data in dsai_msg_list:
+                                dsai_mid_str = dsai_mid.decode("utf-8") if isinstance(dsai_mid, bytes) else str(dsai_mid)
+                                dsai_clean_data = {}
+                                if isinstance(dsai_data, dict):
+                                    for k, v in dsai_data.items():
+                                        k_str = k.decode("utf-8") if isinstance(k, bytes) else str(k)
+                                        v_str = v.decode("utf-8") if isinstance(v, bytes) else v
+                                        dsai_clean_data[k_str] = v_str
+                                dsai_messages.append(Message(stream=str(dsai_stream), msg_id=dsai_mid_str, data=dsai_clean_data))
+            except Exception as dsai_pel_err:
+                logger.debug(f"PEL read check error: {dsai_pel_err}")
+
+        # If no pending unacknowledged messages, read new messages from stream
+        if not dsai_messages:
+            try:
+                dsai_messages = self.consumer.read(self.dsai_stream_name, count=dsai_count, block_ms=dsai_block_ms)
+            except TypeError:
+                dsai_messages = self.consumer.read(count=dsai_count, block_ms=dsai_block_ms)
+
+        return dsai_messages or []
+
     def dsai_run_loop(self, dsai_stop_flag=None, dsai_max_iterations: Optional[int] = None):
         """
-        Main consumer event loop (VP-12, VP-23).
+        Main consumer event loop (VP-12, VP-23, REL-57, REL-58).
         """
         self.consumer.ensure_group(self.dsai_stream_name)
         logger.info(f"VPS Consumer running on stream '{self.dsai_stream_name}' in group '{self.dsai_group_name}'")
 
+        dsai_last_reclaim = time.time()
         iteration = 0
         while True:
             if dsai_stop_flag and dsai_stop_flag.is_set():
                 break
 
             try:
-                messages = self.consumer.read(self.dsai_stream_name, count=10, block_ms=2000)
-                for msg in messages:
+                # Periodic idle message reclaim sweep (REL-58)
+                if time.time() - dsai_last_reclaim > 30.0:
                     try:
-                        event_data = json.loads(msg.data.get("event", "{}"))
+                        self.dsai_reclaim_idle_messages()
+                    except Exception as reclaim_err:
+                        logger.debug(f"VPS idle reclaim error: {reclaim_err}")
+                    dsai_last_reclaim = time.time()
+
+                messages = self.dsai_read_messages(dsai_count=10, dsai_block_ms=2000)
+                # Synchronize resilient consumer dependencies
+                self.dsai_resilient_consumer.dsai_producer = self.dsai_producer
+                self.dsai_resilient_consumer.dsai_max_retries = self.max_message_retries
+                self.dsai_resilient_consumer.dsai_dlq_stream = self.dsai_dlq_stream
+                self.dsai_resilient_consumer.dsai_ack_fn = (
+                    lambda mid: self.consumer.ack(self.dsai_stream_name, mid)
+                    if hasattr(self.consumer, "ack") else None
+                )
+
+                for msg in messages:
+                    def dsai_handle_frame(m):
+                        event_data = json.loads(m.data.get("event", "{}")) if isinstance(m.data, dict) else json.loads(m.data)
                         frame_event = FrameReadyEvent(**event_data)
                         logger.info(f"VPS received FrameReadyEvent: video={frame_event.video_id}, segment={frame_event.segment_id}")
-
-                        # Process detections durably
                         self.dsai_process_event(frame_event)
 
-                        # Acknowledge source FrameReadyEvent ONLY after durable success (VP-23)
-                        self.consumer.ack(self.dsai_stream_name, msg.id)
-                        self.message_retry_counts.pop(msg.id, None)
-                        logger.debug(f"Acknowledged frame event {msg.id}")
-                    except Exception as proc_e:
-                        self.message_retry_counts[msg.id] = self.message_retry_counts.get(msg.id, 0) + 1
-                        attempts = self.message_retry_counts[msg.id]
-                        logger.error(f"Error processing frame event {msg.id} (attempt {attempts}/{self.max_message_retries}): {proc_e}")
-                        if attempts >= self.max_message_retries:
-                            logger.error(f"Event {msg.id} exceeded max retries, forwarding to DLQ '{self.dsai_dlq_stream}'")
-                            if self.dsai_producer is not None:
-                                try:
-                                    self.dsai_producer.publish(self.dsai_dlq_stream, {
-                                        "source_stream": self.dsai_stream_name,
-                                        "message_id": msg.id,
-                                        "event": msg.data.get("event"),
-                                        "error": str(proc_e),
-                                    })
-                                except Exception as dlq_e:
-                                    logger.error(f"Failed publishing to DLQ: {dlq_e}")
-                            self.consumer.ack(self.dsai_stream_name, msg.id)
-                            self.message_retry_counts.pop(msg.id, None)
-                        continue
+                    self.dsai_resilient_consumer.dsai_process_message(msg, dsai_handle_frame)
 
                 iteration += 1
                 if dsai_max_iterations and iteration >= dsai_max_iterations:
@@ -410,5 +482,6 @@ class VisionProcessingConsumer:
                 logger.error(f"Error in VPS consumer loop: {loop_e}")
                 time.sleep(1)
 
+    read_messages = dsai_read_messages
     process_event = dsai_process_event
     run_loop = dsai_run_loop

@@ -9,11 +9,16 @@ from typing import Optional, Dict, Any
 from fastapi import FastAPI, HTTPException
 
 from deepSightAI.Trinetra.Shared.LoggingSetup import dsai_setup_logging, dsai_get_logger
+from deepSightAI.Trinetra.Shared.Middleware import RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+from deepSightAI.Trinetra.Shared.Metrics import dsai_metrics_response
 from deepSightAI.Trinetra.VisionProcessingService.dsai_consumer import VisionProcessingConsumer
 
 logger = dsai_get_logger("deepSightAI.Trinetra.VisionProcessingService")
 
 app = FastAPI(title="Vision Processing Service", version="1.0.0")
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 
 class VisionProcessingService:
@@ -63,7 +68,27 @@ def get_service() -> VisionProcessingService:
 
 @app.get("/health")
 def dsai_health():
+    """Liveness probe (REL-63)."""
     return {"status": "healthy", "service": "VisionProcessingService"}
+
+
+@app.get("/ready")
+def dsai_ready():
+    """Readiness probe (REL-63)."""
+    svc = get_service()
+    is_ready = bool(svc.dsai_worker_thread and svc.dsai_worker_thread.is_alive())
+    return {
+        "status": "ready" if is_ready else "starting",
+        "service": "VisionProcessingService",
+        "worker_alive": is_ready
+    }
+
+
+@app.get("/metrics")
+def dsai_metrics():
+    """Scrapeable Prometheus metrics endpoint (REL-64)."""
+    return dsai_metrics_response()
+
 
 
 @app.on_event("startup")

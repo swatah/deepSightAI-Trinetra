@@ -15,6 +15,7 @@ Provides:
 import os
 import sys
 import io
+import time
 import json
 import base64
 import logging
@@ -48,6 +49,10 @@ from deepSightAI.Trinetra.Shared.Repositories.CameraRepository import CameraRepo
 from deepSightAI.Trinetra.Shared.Repositories.PlateRepository import PlateRepository, dsai_trigram_similarity
 from deepSightAI.Trinetra.WatchlistMatcherService.dsai_api import dsai_watchlist_router
 
+from deepSightAI.Trinetra.Shared.Middleware import RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+from deepSightAI.Trinetra.Shared.Metrics import dsai_record_query_latency, dsai_metrics_response
+
 logger = dsai_get_logger("deepSightAI.Trinetra.SearchService")
 
 app = FastAPI(
@@ -55,6 +60,8 @@ app = FastAPI(
     version="1.0.0",
     description="Vector and attribute search service for video frames, vehicles, and persons."
 )
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 app.include_router(dsai_watchlist_router)
 
@@ -340,8 +347,46 @@ async def startup_event():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint (REL-63)."""
     return {"status": "healthy", "service": "SearchService"}
+
+
+@app.get("/ready")
+async def ready_check():
+    """Readiness probe checking Milvus and storage dependencies (REL-63)."""
+    checks = {}
+    is_ready = True
+    try:
+        from pymilvus import connections
+        if not connections.has_connection("default"):
+            connect_milvus_with_retry(alias="default")
+        checks["milvus"] = "connected"
+    except Exception as e:
+        checks["milvus"] = f"unhealthy: {e}"
+        is_ready = False
+
+    if not is_ready:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail={"status": "not_ready", "checks": checks})
+    return {"status": "ready", "service": "SearchService", "checks": checks}
+
+
+@app.get("/metrics")
+def metrics_endpoint():
+    """Prometheus scrapeable metrics endpoint (REL-64)."""
+    return dsai_metrics_response()
+
+
+def dsai_resolve_tenant(current_user: Dict[str, Any], requested_tenant: Optional[str] = None) -> str:
+    """Enforce tenant scoping from authenticated context across operations (AUTH-50)."""
+    auth_tenant = current_user.get("tenant_id")
+    roles = current_user.get("roles", [])
+    if not isinstance(roles, list):
+        roles = [roles] if roles else []
+    if auth_tenant:
+        if requested_tenant and requested_tenant != "default" and requested_tenant != auth_tenant and "admin" not in roles:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-tenant access forbidden")
+        return auth_tenant
+    return requested_tenant or "default"
 
 
 def dsai_require_search_read(current_user: Dict = Depends(require_auth)) -> Dict[str, Any]:
@@ -372,7 +417,7 @@ async def get_cameras(
     Retrieve registered cameras for a tenant (SR-39).
     Enforces fail-closed require_auth and 'search:read' permission (SR-43).
     """
-    effective_tenant = current_user.get("tenant_id") or tenant_id
+    effective_tenant = dsai_resolve_tenant(current_user, tenant_id)
     try:
         repo = CameraRepository(effective_tenant)
         cameras = repo.list_all(active_only=active_only)
@@ -403,9 +448,10 @@ async def search_text(
     Filters: camera_ids, time_start, time_end.
     Enforces fail-closed require_auth and 'search:read' permission (SR-43).
     """
+    dsai_start_time = time.time()
     try:
         query_embedding = dsai_encode_text_query(request.get_query())
-        tenant_id = current_user.get("tenant_id") or request.tenant_id
+        tenant_id = dsai_resolve_tenant(current_user, request.tenant_id)
         collection = get_milvus_collection(tenant_id)
         collection.load()
 
@@ -450,6 +496,7 @@ async def search_text(
                     thumbnail_url=dsai_generate_presigned_url(fpath)
                 ))
 
+        dsai_record_query_latency("search_text", tenant_id, time.time() - dsai_start_time)
         return search_results
 
     except Exception as e:
@@ -467,8 +514,9 @@ async def search_vehicle(
     Vehicle search with attribute and reference crop filtering (SR-36).
     Enforces fail-closed require_auth and 'search:read' permission (SR-43).
     """
+    dsai_start_time = time.time()
     try:
-        tenant_id = current_user.get("tenant_id") or request.tenant_id
+        tenant_id = dsai_resolve_tenant(current_user, request.tenant_id)
         collection = ensure_vehicle_collection(tenant_id, embedding_dim=REID_EMBEDDING_DIM)
         collection.load()
 
@@ -546,6 +594,7 @@ async def search_vehicle(
                     thumbnail_url=dsai_generate_presigned_url(cpath or fpath)
                 ))
 
+        dsai_record_query_latency("search_vehicle", tenant_id, time.time() - dsai_start_time)
         return search_results
 
     except Exception as e:
@@ -562,8 +611,9 @@ async def search_person(
     Person search with reference crop Re-ID and camera/time filters (SR-37).
     Enforces fail-closed require_auth and 'search:read' permission (SR-43).
     """
+    dsai_start_time = time.time()
     try:
-        tenant_id = current_user.get("tenant_id") or request.tenant_id
+        tenant_id = dsai_resolve_tenant(current_user, request.tenant_id)
         collection = ensure_person_collection(tenant_id, embedding_dim=REID_EMBEDDING_DIM)
         collection.load()
 
@@ -627,6 +677,7 @@ async def search_person(
                     thumbnail_url=dsai_generate_presigned_url(cpath or fpath)
                 ))
 
+        dsai_record_query_latency("search_person", tenant_id, time.time() - dsai_start_time)
         return search_results
 
     except Exception as e:
@@ -644,8 +695,9 @@ async def search_plate(
     Ranks exact and OCR-confused plate reads (e.g. 0/O, 1/I) by trigram similarity.
     Enforces fail-closed require_auth and 'search:read' permission (SR-43).
     """
+    dsai_start_time = time.time()
     try:
-        tenant_id = current_user.get("tenant_id") or request.tenant_id
+        tenant_id = dsai_resolve_tenant(current_user, request.tenant_id)
         query_text = request.plate_number.strip()
         if not query_text:
             return []
@@ -694,6 +746,7 @@ async def search_plate(
                 }
             ))
 
+        dsai_record_query_latency("search_plate", tenant_id, time.time() - dsai_start_time)
         return search_results
 
     except Exception as e:

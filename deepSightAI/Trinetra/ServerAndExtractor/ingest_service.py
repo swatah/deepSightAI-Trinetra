@@ -16,15 +16,37 @@ from deepSightAI.Trinetra.Shared.Streaming.Schema import IngestJobStarted
 from datetime import datetime
 
 
+from deepSightAI.Trinetra.Shared.Middleware import require_auth, RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+
 # --- CONFIGURATION ---
 REGISTRY_URL = os.getenv("REGISTRY_URL", "http://registry:8000")
 CONTROL_STREAM = "control:ingest"
 
+def get_auth_context(request: Request):
+    """Require cryptographic Bearer JWT authentication (AUTH-45, AUTH-46, AUTH-50)."""
+    if request.url.path in ("/health", "/ready", "/metrics"):
+        return {}
+    user_payload = require_auth(request)
+    x_tenant = request.headers.get("X-Tenant-ID")
+    if x_tenant and user_payload and isinstance(user_payload, dict):
+        auth_tenant = user_payload.get("tenant_id")
+        user_roles = user_payload.get("roles", [])
+        if auth_tenant and x_tenant != auth_tenant and "admin" not in user_roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"X-Tenant-ID header '{x_tenant}' does not match authenticated token tenant '{auth_tenant}'"
+            )
+    return user_payload
+
 # --- FASTAPI APP ---
 app = FastAPI(
     title="Unified Ingest Service",
-    description="Single entry point for video ingestion from various sources"
+    description="Single entry point for video ingestion from various sources",
+    dependencies=[Depends(get_auth_context)]
 )
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 
 # --- DEPENDENCIES ---
@@ -239,3 +261,26 @@ async def get_job_status(job_id: str):
         "status": "unknown",
         "detail": "Status tracking not yet implemented"
     }
+
+
+# --- HEALTH & READINESS PROBES (REL-63) ---
+@app.get("/health")
+def dsai_health():
+    """Liveness probe (REL-63)."""
+    return {"status": "healthy", "service": "ServerAndExtractor.ingest"}
+
+
+@app.get("/ready")
+async def dsai_ready():
+    """Readiness probe checking dependencies (REL-63)."""
+    checks = {}
+    is_ready = True
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{REGISTRY_URL}/health")
+            checks["registry"] = "ok" if resp.status_code == 200 else f"status_{resp.status_code}"
+    except Exception as e:
+        checks["registry"] = f"unreachable: {e}"
+
+    return {"status": "ready" if is_ready else "not_ready", "service": "ServerAndExtractor.ingest", "checks": checks}
+

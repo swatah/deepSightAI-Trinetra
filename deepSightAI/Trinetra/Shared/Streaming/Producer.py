@@ -26,29 +26,26 @@ class StreamProducer:
         """
         self.client = redis_client or create_redis_client()
 
-    def publish(self, stream_name: str, event, maxlen: int = 10000):
+    def publish(self, stream_name: str, event, maxlen: int = 10000, correlation_id: str = None, x_request_id: str = None, **kwargs):
         """
         Publish an event to a Redis Stream.
 
-        The event is serialized to JSON and stored under the 'event' field.
-
-        Args:
-            stream_name: Name of the Redis Stream (e.g., "frames:video-123")
-            event: Pydantic model instance representing the event.
-            maxlen: Maximum length of the stream (approximate trimming).
-                    Default 10,000 entries to bound memory usage.
-
-        Returns:
-            The Redis entry ID (e.g., "1656789123456-0").
-
-        Raises:
-            TypeError: If event does not support model_dump_json().
-            RedisError: If publishing fails.
+        Supports Pydantic models or dict payloads and propagates correlation_id (REL-54).
         """
-        if not hasattr(event, 'model_dump_json'):
-            raise TypeError("Event must be a Pydantic model with model_dump_json() method")
+        import json
+        effective_req_id = correlation_id or x_request_id or kwargs.get("x_request_id")
+        if hasattr(event, 'model_dump_json'):
+            payload = event.model_dump_json()
+            req_id = effective_req_id or getattr(event, "correlation_id", None)
+        elif isinstance(event, dict):
+            payload = json.dumps(event)
+            req_id = effective_req_id or event.get("correlation_id") or event.get("request_id")
+        else:
+            raise TypeError("Event must be a Pydantic model with model_dump_json() or a dict")
 
-        payload = event.model_dump_json()
-        # Publish to stream with maxlen to enforce retention policy
-        # Using approximate=True for O(1) trimming (roughly maxlen)
-        return self.client.xadd(stream_name, {"event": payload}, maxlen=maxlen)
+        entry_data = {"event": payload}
+        if req_id:
+            entry_data["x_request_id"] = str(req_id)
+            entry_data["correlation_id"] = str(req_id)
+        return self.client.xadd(stream_name, entry_data, maxlen=maxlen)
+

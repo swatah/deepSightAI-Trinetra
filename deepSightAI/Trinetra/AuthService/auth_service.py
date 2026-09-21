@@ -21,7 +21,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, status, Background
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, create_engine, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, create_engine, JSON, text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 
@@ -33,13 +33,8 @@ from cryptography.hazmat.primitives import serialization
 # ============================================================================
 # AUTH DEPENDENCY
 # ============================================================================
-try:
-    from deepSightAI.Trinetra.Shared.Middleware import require_auth
-    AUTH_AVAILABLE = True
-except ImportError:
-    AUTH_AVAILABLE = False
-    def require_auth():
-        return {}
+from deepSightAI.Trinetra.Shared.Middleware import require_auth
+AUTH_AVAILABLE = True
 
 # ============================================================================
 # Configuration
@@ -370,17 +365,33 @@ class PasswordResetConfirm(BaseModel):
 # FastAPI Application
 # ============================================================================
 
+from deepSightAI.Trinetra.Shared.Middleware import RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+
 app = FastAPI(
     title="AuthService",
     description="Authentication & Authorization service for deepSightAI Trinetra",
     version="0.1.0"
 )
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 
 @app.get("/health")
 def health_check():
-    """Health check endpoint."""
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    """Health check endpoint (REL-63)."""
+    return {"status": "healthy", "service": "AuthService", "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/ready")
+def ready_check(db: Session = Depends(get_db)):
+    """Readiness check endpoint (REL-63)."""
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ready", "service": "AuthService"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database unreachable: {e}")
+
 
 
 @app.post("/auth/register", response_model=Token)

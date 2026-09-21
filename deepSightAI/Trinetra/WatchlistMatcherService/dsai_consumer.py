@@ -100,7 +100,19 @@ class WatchlistMatcherConsumer:
         self.dsai_dlq_stream = (
             self.dsai_config.get("dlq_stream") or os.getenv("DLQ_STREAM", "events:dlq")
         )
-        self.dsai_retry_counts: Dict[str, int] = {}
+
+        from deepSightAI.Trinetra.Shared.Streaming.dsai_resilient_consumer import ResilientStreamConsumer
+        self.dsai_resilient_consumer = ResilientStreamConsumer(
+            group_name=self.dsai_group_name,
+            consumer_name=self.dsai_consumer_name,
+            stream_name=self.dsai_stream_name,
+            dlq_stream=self.dsai_dlq_stream,
+            max_retries=self.dsai_max_retries,
+            redis_client=getattr(self.dsai_consumer, "client", None),
+            producer=self.dsai_producer,
+            ack_fn=self.dsai_ack_message,
+        )
+        self.dsai_retry_counts: Dict[str, int] = self.dsai_resilient_consumer.dsai_retry_counts
 
     def dsai_ensure_streams(self):
         """Ensure StreamConsumer and StreamProducer are initialized."""
@@ -135,6 +147,26 @@ class WatchlistMatcherConsumer:
                 dsai_logger.error(f"Failed to ack message {dsai_msg_id}: {dsai_ack_err}")
         except Exception as dsai_ack_err:
             dsai_logger.error(f"Failed to ack message {dsai_msg_id}: {dsai_ack_err}")
+
+    def dsai_reclaim_idle_messages(self, dsai_min_idle_ms: int = 60000, dsai_count: int = 10) -> List[Any]:
+        """Automatic idle-message reclaim sweep using XPENDING / XCLAIM (REL-58)."""
+        if not self.dsai_consumer or not hasattr(self.dsai_consumer, "client"):
+            return []
+        try:
+            from deepSightAI.Trinetra.Shared.Streaming.ResilientConsumer import ResilientStreamConsumer
+            r_consumer = ResilientStreamConsumer(
+                dsai_group_name=self.dsai_group_name,
+                dsai_stream_name=self.dsai_stream_name,
+                dsai_consumer_id=self.dsai_consumer_name,
+                dsai_redis_client=getattr(self.dsai_consumer, "client", None),
+                dsai_producer=self.dsai_producer,
+            )
+            return r_consumer.reclaim_idle_messages(dsai_min_idle_ms=dsai_min_idle_ms, dsai_count=dsai_count)
+        except Exception as e:
+            dsai_logger.error(f"Error reclaiming idle messages: {e}")
+            return []
+
+    reclaim_idle_messages = dsai_reclaim_idle_messages
 
     def dsai_read_messages(self, dsai_count: int = 10) -> List[Any]:
         """Read pending unacknowledged messages first (PEL), then new messages."""
@@ -290,6 +322,14 @@ class WatchlistMatcherConsumer:
         if self.dsai_consumer is None:
             return 0
 
+        # Synchronize resilient consumer dependencies
+        self.dsai_resilient_consumer.dsai_producer = self.dsai_producer
+        self.dsai_resilient_consumer.dsai_max_retries = self.dsai_max_retries
+        self.dsai_resilient_consumer.dsai_dlq_stream = self.dsai_dlq_stream
+        self.dsai_resilient_consumer.dsai_ack_fn = self.dsai_ack_message
+        if hasattr(self.dsai_consumer, "client") and self.dsai_consumer.client is not None:
+            self.dsai_resilient_consumer.dsai_client = self.dsai_consumer.client
+
         try:
             dsai_messages = self.dsai_read_messages(dsai_count=dsai_count)
         except Exception as dsai_read_err:
@@ -298,64 +338,40 @@ class WatchlistMatcherConsumer:
 
         dsai_processed = 0
         for dsai_msg in dsai_messages:
-            dsai_payload = None
-            try:
-                # Parse event payload
-                dsai_payload = dsai_msg.data
+            def dsai_handle_object_event(m):
+                dsai_payload = m.data
                 if isinstance(dsai_payload, str):
                     dsai_payload = json.loads(dsai_payload)
                 elif isinstance(dsai_payload, dict) and "event" in dsai_payload and isinstance(dsai_payload["event"], str):
                     dsai_payload = json.loads(dsai_payload["event"])
 
                 dsai_obj_event = ObjectDetectedEvent(**dsai_payload)
-                # Process match logic and durable commit
                 self.dsai_process_event(dsai_obj_event)
 
-                # ACK message only upon durable commit (WL-31)
-                self.dsai_ack_message(dsai_msg.id)
-                self.dsai_retry_counts.pop(dsai_msg.id, None)
+            if self.dsai_resilient_consumer.dsai_process_message(dsai_msg, dsai_handle_object_event):
                 dsai_processed += 1
-
-            except Exception as dsai_proc_err:
-                self.dsai_retry_counts[dsai_msg.id] = self.dsai_retry_counts.get(dsai_msg.id, 0) + 1
-                dsai_attempts = self.dsai_retry_counts[dsai_msg.id]
-                dsai_logger.error(
-                    f"Processing failed for message {dsai_msg.id} "
-                    f"(attempt {dsai_attempts}/{self.dsai_max_retries}): {dsai_proc_err}"
-                )
-
-                if dsai_attempts >= self.dsai_max_retries:
-                    dsai_logger.error(
-                        f"Message {dsai_msg.id} exceeded {self.dsai_max_retries} retries; "
-                        f"routing to DLQ '{self.dsai_dlq_stream}' and acknowledging"
-                    )
-                    if self.dsai_producer is not None:
-                        try:
-                            self.dsai_producer.publish(self.dsai_dlq_stream, {
-                                "source_stream": self.dsai_stream_name,
-                                "message_id": dsai_msg.id,
-                                "event": dsai_payload if dsai_payload is not None else getattr(dsai_msg, "data", None),
-                                "error": str(dsai_proc_err),
-                            })
-                        except Exception as dsai_dlq_err:
-                            dsai_logger.error(f"Failed publishing to DLQ: {dsai_dlq_err}")
-
-                    # Acknowledge to unblock head-of-line poison pill
-                    self.dsai_ack_message(dsai_msg.id)
-                    self.dsai_retry_counts.pop(dsai_msg.id, None)
 
         return dsai_processed
 
     def run_loop(self, dsai_stop_flag=None):
-        """Continuous consumer loop."""
+        """Continuous consumer loop (REL-57, REL-58)."""
         dsai_logger.info(f"Starting WatchlistMatcherConsumer loop on '{self.dsai_stream_name}'...")
         self.dsai_cache.dsai_start()
 
+        dsai_last_reclaim = time.time()
         while True:
             if dsai_stop_flag and dsai_stop_flag.is_set():
                 break
 
             try:
+                # Periodic idle message reclaim sweep (REL-58)
+                if time.time() - dsai_last_reclaim > 30.0:
+                    try:
+                        self.dsai_reclaim_idle_messages()
+                    except Exception as dsai_reclaim_err:
+                        dsai_logger.debug(f"Matcher idle reclaim sweep error: {dsai_reclaim_err}")
+                    dsai_last_reclaim = time.time()
+
                 dsai_count = self.dsai_consume_batch(dsai_count=10)
                 if dsai_count == 0:
                     time.sleep(0.1)
@@ -365,3 +381,5 @@ class WatchlistMatcherConsumer:
 
         self.dsai_cache.dsai_stop()
         dsai_logger.info("WatchlistMatcherConsumer loop terminated.")
+
+    dsai_run_loop = run_loop

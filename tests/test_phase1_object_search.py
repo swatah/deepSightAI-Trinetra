@@ -220,6 +220,11 @@ class TestDM5IngestCameraIdRequired:
         app.dependency_overrides[get_producer] = lambda: mock_producer
         app.dependency_overrides[get_extractor] = lambda: mock_extractor
 
+        from deepSightAI.Trinetra.AuthService.auth_service import create_access_token
+        dsai_test_token = create_access_token(
+            data={"sub": "test_operator", "tenant_id": "tenant_test", "roles": ["operator"]}
+        )
+
         client = TestClient(app)
         try:
             with patch("deepSightAI.Trinetra.ServerAndExtractor.ingest_service.publish_event") as mock_publish, \
@@ -230,7 +235,14 @@ class TestDM5IngestCameraIdRequired:
                     "camera_id": "cam_gate_42",
                     "tenant_id": "tenant_test"
                 }
-                response = client.post("/ingest", json=payload, headers={"X-Tenant-ID": "tenant_test"})
+                response = client.post(
+                    "/ingest",
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {dsai_test_token}",
+                        "X-Tenant-ID": "tenant_test"
+                    }
+                )
                 assert response.status_code == 200
                 data = response.json()
                 assert data["camera_id"] == "cam_gate_42"

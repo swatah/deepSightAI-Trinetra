@@ -121,6 +121,40 @@ jobs:
           echo "✓ Helm chart validation passed"
         fi
 
+  # Job: Strict CI Gating for Production Hardening (TEST-80)
+  strict-gating:
+    name: Strict Hardening & Resilience CI Gating (TEST-80)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install flake8 pytest pytest-cov
+        pip install -e .
+        pip install -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt
+
+    - name: Strict Flake8 Syntax & Critical Checks (Zero Tolerance)
+      run: |
+        flake8 deepSightAI/Trinetra/ --count --select=E9,F63,F7,F82 --show-source --statistics
+      continue-on-error: false
+
+    - name: Run Phase 0 through Phase 4 Verification Suites
+      run: |
+        pytest tests/test_phase0_groundwork.py \
+               tests/test_phase1_object_search.py \
+               tests/test_phase2_plate_search.py \
+               tests/test_phase3_watchlist_alerting.py \
+               tests/test_phase4_production_hardening.py \
+               -v
+      continue-on-error: false
+
   # Job 3: Unit Tests with coverage (run in Docker)
   unit-tests:
     runs-on: ubuntu-latest
@@ -247,7 +281,7 @@ jobs:
 
   # Job 5: Build and push container images (on main branch only)
   build-images:
-    needs: [pre-check, static-analysis, unit-tests, integration-tests]
+    needs: [pre-check, static-analysis, strict-gating, unit-tests, integration-tests]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
@@ -311,7 +345,7 @@ jobs:
 
   # Job 7: Generate summary
   summary:
-    needs: [pre-check, static-analysis, unit-tests, integration-tests]
+    needs: [pre-check, static-analysis, strict-gating, unit-tests, integration-tests]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4

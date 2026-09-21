@@ -65,7 +65,12 @@ class EmbedderRegister(BaseModel):
     embedder_id: str
     embedder_url: str
 
+from deepSightAI.Trinetra.Shared.Middleware import RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+
 app = FastAPI(title="Central Registry (Redis)")
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 @app.post("/register")
 def register_extractor(extractor: ExtractorRegister):
@@ -174,4 +179,14 @@ def get_all_services():
 @app.get("/health")
 def health_check():
     """Health check endpoint."""
-    return {"status": "ok"}
+    return {"status": "healthy", "service": "ServerAndExtractor.registry"}
+
+
+@app.get("/ready")
+def ready_check():
+    """Readiness check endpoint (REL-63)."""
+    try:
+        r.ping()
+        return {"status": "ready", "service": "ServerAndExtractor.registry"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Redis unreachable: {e}")

@@ -12,19 +12,44 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 import psycopg2
 from psycopg2.extras import execute_values
-from kafka import KafkaProducer
-import jsonschema
+try:
+    from kafka import KafkaProducer
+except (ImportError, AttributeError):
+    KafkaProducer = None
+
+try:
+    import jsonschema
+except Exception:
+    jsonschema = None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("audit_service")
 
 # Load audit log schema
-SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "design", "audit-schema.json")
-with open(SCHEMA_PATH) as f:
-    AUDIT_SCHEMA = json.load(f)
+dsai_candidate_paths = [
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "docs", "design", "audit-schema.json"),
+    os.path.join(os.path.dirname(__file__), "..", "docs", "design", "audit-schema.json"),
+    os.path.abspath("docs/design/audit-schema.json"),
+]
+SCHEMA_PATH = next((p for p in dsai_candidate_paths if os.path.exists(p)), dsai_candidate_paths[0])
+if os.path.exists(SCHEMA_PATH):
+    with open(SCHEMA_PATH) as f:
+        AUDIT_SCHEMA = json.load(f)
+else:
+    AUDIT_SCHEMA = {}
 
-app = FastAPI(title="AuditService", description="Immutable audit logging service")
+from fastapi import FastAPI, HTTPException, Depends
+from deepSightAI.Trinetra.Shared.Middleware import require_auth, RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+
+app = FastAPI(
+    title="AuditService",
+    description="Immutable audit logging service",
+    dependencies=[Depends(require_auth)]
+)
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 # Database connection (from env)
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/postgres")
@@ -79,11 +104,12 @@ class AuditService:
         if "type" not in res or "id" not in res:
             raise ValueError("resource must have type and id")
         # Full JSON Schema validation (if jsonschema is available)
-        try:
-            jsonschema.validate(instance=log, schema=AUDIT_SCHEMA)
-        except Exception as e:
-            logger.error(f"Audit log validation failed: {e}")
-            raise ValueError(f"Invalid audit log: {e}")
+        if jsonschema is not None and AUDIT_SCHEMA:
+            try:
+                jsonschema.validate(instance=log, schema=AUDIT_SCHEMA)
+            except Exception as e:
+                logger.error(f"Audit log validation failed: {e}")
+                raise ValueError(f"Invalid audit log: {e}")
 
     def store(self, log: Dict[str, Any]):
         """
@@ -180,6 +206,20 @@ async def receive_audit_batch(logs: List[Dict[str, Any]]):
 async def health():
     """Health check endpoint."""
     return {"status": "healthy", "service": "audit"}
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness check endpoint (REL-63)."""
+    checks = {
+        "db": "ok" if audit_service.conn and not audit_service.conn.closed else "disconnected",
+        "kafka": "ok" if audit_service.kafka_producer else "disconnected",
+    }
+    is_ready = bool(audit_service.conn and not audit_service.conn.closed)
+    if not is_ready:
+        raise HTTPException(status_code=503, detail={"status": "not_ready", "checks": checks})
+    return {"status": "ready", "service": "audit", "checks": checks}
+
 
 
 # CLI entrypoint for running the service

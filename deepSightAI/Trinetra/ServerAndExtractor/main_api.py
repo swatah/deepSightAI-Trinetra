@@ -45,20 +45,17 @@ class RtspSourceRequest(BaseModel):
         return str(v).strip()
 
 # --- AUTH DEPENDENCY ---
-try:
-    from deepSightAI.Trinetra.Shared.Middleware import require_auth
-    AUTH_AVAILABLE = True
-except ImportError:
-    # Shared middleware not available; skip auth (development only)
-    AUTH_AVAILABLE = False
-    def require_auth():
-        return {}
+from deepSightAI.Trinetra.Shared.Middleware import require_auth, RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+AUTH_AVAILABLE = True
 
 # --- FASTAPI APP INITIALIZATION ---
 app = FastAPI(
     title="Input Source Router",
-    dependencies=[Depends(require_auth)] if AUTH_AVAILABLE else []
+    dependencies=[Depends(require_auth)]
 )
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 # --- HELPER FUNCTIONS ---
 def fetch_video_from_minio(object_key: str) -> str:
@@ -72,9 +69,28 @@ def fetch_video_from_minio(object_key: str) -> str:
         minio_client.fget_object(VIDEO_BUCKET, object_key, tmpf.name)
         return tmpf.name
 
+def dsai_validate_request_tenant(http_request: Request, requested_tenant_id: Optional[str]) -> str:
+    """Validate that requested tenant_id matches authenticated tenant claim, preventing cross-tenant injection."""
+    auth_user = getattr(http_request.state, "user", {}) or {}
+    auth_tenant = getattr(http_request.state, "tenant_id", None) or auth_user.get("tenant_id")
+    if not auth_tenant:
+        return requested_tenant_id or "default"
+
+    user_roles = auth_user.get("roles", []) if isinstance(auth_user, dict) else []
+    is_admin = "admin" in user_roles or "system" in user_roles
+
+    if requested_tenant_id and requested_tenant_id != auth_tenant and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Tenant mismatch: authenticated as '{auth_tenant}', cannot submit job for '{requested_tenant_id}'"
+        )
+    return requested_tenant_id if (requested_tenant_id and is_admin) else auth_tenant
+
+
 # --- API ENDPOINTS ---
 @app.post("/process_video")
 async def process_video(request: VideoSourceRequest, http_request: Request):
+    enforced_tenant_id = dsai_validate_request_tenant(http_request, request.tenant_id)
     try:
         local_video_path = fetch_video_from_minio(request.video_uri)
     except Exception as e:
@@ -113,7 +129,7 @@ async def process_video(request: VideoSourceRequest, http_request: Request):
                     "segment_id": i,
                     "start_time": seg['start'],
                     "duration": seg['duration'],
-                    "tenant_id": request.tenant_id,
+                    "tenant_id": enforced_tenant_id,
                     "camera_id": request.camera_id
                 }
                 task = client.post(extractor_url, json=job_payload)
@@ -128,6 +144,7 @@ async def process_video(request: VideoSourceRequest, http_request: Request):
 
 @app.post("/process_rtsp_stream")
 async def process_rtsp_stream(request: RtspSourceRequest, http_request: Request):
+    enforced_tenant_id = dsai_validate_request_tenant(http_request, request.tenant_id)
     # RTSP capacity is per-extractor and numeric (soft/hard limit, current
     # used count), not the binary busy/available claim used for file jobs --
     # one extractor can watch several camera feeds at once. So instead of
@@ -186,7 +203,7 @@ async def process_rtsp_stream(request: RtspSourceRequest, http_request: Request)
                 f"{best['extractor_url']}/extract_stream",
                 json={
                     "rtsp_url": request.rtsp_url,
-                    "tenant_id": request.tenant_id,
+                    "tenant_id": enforced_tenant_id,
                     "camera_id": request.camera_id
                 }
             )
@@ -277,3 +294,40 @@ async def replay_video(video_id: str, current_user=Depends(require_auth) if AUTH
     service = ReplayService()
     count = service.replay(video_id)
     return {"replayed": count, "video_id": video_id}
+
+
+# --- HEALTH & READINESS PROBES (REL-63) ---
+@app.get("/health")
+def dsai_health():
+    """Liveness probe (REL-63)."""
+    return {"status": "healthy", "service": "ServerAndExtractor.main_api"}
+
+
+@app.get("/ready")
+async def dsai_ready():
+    """Readiness probe checking dependencies (REL-63)."""
+    checks = {}
+    is_ready = True
+
+    try:
+        minio_client = Minio(
+            MINIO_URL.replace("http://", "").replace("https://", ""),
+            access_key=MINIO_ACCESS_KEY,
+            secret_key=MINIO_SECRET_KEY,
+            secure=False
+        )
+        checks["minio"] = "ok"
+    except Exception as e:
+        checks["minio"] = f"unhealthy: {e}"
+        is_ready = False
+
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{REGISTRY_URL}/health")
+            checks["registry"] = "ok" if resp.status_code == 200 else f"status_{resp.status_code}"
+    except Exception as e:
+        checks["registry"] = f"unreachable: {e}"
+
+    if not is_ready:
+        raise HTTPException(status_code=503, detail={"status": "not_ready", "checks": checks})
+    return {"status": "ready", "service": "ServerAndExtractor.main_api", "checks": checks}

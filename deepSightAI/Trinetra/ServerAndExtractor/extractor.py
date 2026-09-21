@@ -14,7 +14,7 @@ import uuid
 from collections import deque
 from datetime import datetime
 from typing import Optional
-from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 from minio import Minio
 from minio.error import S3Error
@@ -505,19 +505,16 @@ def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threadi
         print(f"[{EXTRACTOR_ID}] RTSP job for {rtsp_url} has concluded.")
 
 # --- FASTAPI APPLICATION SETUP ---
-# --- AUTH DEPENDENCY ---
-try:
-    from deepSightAI.Trinetra.Shared.Middleware import require_auth
-    AUTH_AVAILABLE = True
-except ImportError:
-    AUTH_AVAILABLE = False
-    def require_auth():
-        return {}
+from deepSightAI.Trinetra.Shared.Middleware import require_auth, RequestIDMiddleware
+from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+AUTH_AVAILABLE = True
 
 app = FastAPI(
     title="Extractor Service",
-    dependencies=[Depends(require_auth)] if AUTH_AVAILABLE else []
+    dependencies=[Depends(require_auth)]
 )
+app.add_middleware(RequestIDMiddleware)
+register_error_handlers(app)
 
 _heartbeat_thread = None
 
@@ -554,25 +551,47 @@ def on_startup():
         print(f"[{EXTRACTOR_ID}] Failed to register with registry on startup: {e}")
     start_heartbeat_thread()
 
+def dsai_validate_extractor_tenant(http_request: Optional[Request], requested_tenant_id: Optional[str]) -> str:
+    """Ensure incoming extraction job matches authenticated tenant token (AUTH-50)."""
+    if http_request is None:
+        return requested_tenant_id or "default"
+    auth_user = getattr(http_request.state, "user", {}) or {}
+    auth_tenant = getattr(http_request.state, "tenant_id", None) or auth_user.get("tenant_id")
+    if not auth_tenant:
+        return requested_tenant_id or "default"
+
+    user_roles = auth_user.get("roles", []) if isinstance(auth_user, dict) else []
+    is_admin = "admin" in user_roles or "system" in user_roles
+
+    if requested_tenant_id and requested_tenant_id != auth_tenant and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Tenant mismatch in extraction request: authenticated as '{auth_tenant}', cannot process for '{requested_tenant_id}'"
+        )
+    return requested_tenant_id if (requested_tenant_id and is_admin) else auth_tenant
+
+
 @app.post("/extract")
-def extract(request: FileJobRequest, background_tasks: BackgroundTasks):
+def extract(request: FileJobRequest, background_tasks: BackgroundTasks, http_request: Request = None):
     """Endpoint to start a job for a video file segment."""
+    enforced_tenant = dsai_validate_extractor_tenant(http_request, request.tenant_id)
     background_tasks.add_task(
         run_file_extraction_job,
         request.video_uri,
         request.segment_id,
         request.start_time,
         request.duration,
-        request.tenant_id,
+        enforced_tenant,
         request.camera_id
     )
     return {"message": "Job for file segment started."}
 
 @app.post("/extract_stream")
-def extract_stream(request: RtspJobRequest, background_tasks: BackgroundTasks):
+def extract_stream(request: RtspJobRequest, background_tasks: BackgroundTasks, http_request: Request = None):
     """Endpoint to start a job for an RTSP stream. Rejected with 503 if this
     extractor is already at its effective RTSP capacity (soft limit if
     degraded, hard limit otherwise)."""
+    enforced_tenant = dsai_validate_extractor_tenant(http_request, request.tenant_id)
     with _rtsp_lock:
         if len(_active_rtsp_streams) >= _rtsp_effective_limit():
             raise HTTPException(status_code=503, detail="Extractor at RTSP stream capacity")
@@ -585,7 +604,7 @@ def extract_stream(request: RtspJobRequest, background_tasks: BackgroundTasks):
         request.rtsp_url,
         stream_id,
         stream_event,
-        request.tenant_id,
+        enforced_tenant,
         request.camera_id
     )
     return {"message": "Job for RTSP stream started.", "stream_id": stream_id}
@@ -604,6 +623,25 @@ def rtsp_status():
         "effective_limit": RTSP_SOFT_LIMIT if degraded else RTSP_HARD_LIMIT,
         "degraded": degraded,
     }
+
+
+# --- HEALTH & READINESS PROBES (REL-63) ---
+@app.get("/health")
+def dsai_health():
+    """Liveness probe (REL-63)."""
+    return {"status": "healthy", "service": "ServerAndExtractor.extractor"}
+
+
+@app.get("/ready")
+def dsai_ready():
+    """Readiness probe (REL-63)."""
+    return {
+        "status": "ready",
+        "service": "ServerAndExtractor.extractor",
+        "extractor_id": EXTRACTOR_ID,
+        "active_rtsp": len(_active_rtsp_streams)
+    }
+
 
 # --- MAIN THREAD SIGNAL HANDLING ---
 def handle_signal(signum, frame):
