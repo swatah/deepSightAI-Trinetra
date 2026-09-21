@@ -110,4 +110,27 @@ class ObjectDetectedEvent(BaseModel):
     has_plate_read: bool = False
     plate_number: Optional[str] = None
     plate_candidate_id: Optional[str] = None
+    reid_embedding: Optional[List[float]] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class WatchlistAlertEvent(BaseModel):
+    """
+    Event emitted when an object matches a watchlist entry (WL-31).
+    Published to 'events:watchlist_alerts'.
+    """
+    event_type: Literal["watchlist.alert"] = "watchlist.alert"
+    alert_id: int
+    tenant_id: str = Field(default="default")
+    watchlist_entry_id: int
+    video_object_pk: str
+    camera_id: str
+    matched_at: datetime = Field(default_factory=datetime.utcnow)
+    match_score: float
+    crop_path: Optional[str] = None
+    label: Optional[str] = None
+    priority: str = "medium"
+    entry_type: Optional[str] = None
+    matched_entity: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+

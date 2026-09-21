@@ -46,6 +46,7 @@ from deepSightAI.Trinetra.Shared.Milvus import (
 )
 from deepSightAI.Trinetra.Shared.Repositories.CameraRepository import CameraRepository
 from deepSightAI.Trinetra.Shared.Repositories.PlateRepository import PlateRepository, dsai_trigram_similarity
+from deepSightAI.Trinetra.WatchlistMatcherService.dsai_api import dsai_watchlist_router
 
 logger = dsai_get_logger("deepSightAI.Trinetra.SearchService")
 
@@ -54,6 +55,8 @@ app = FastAPI(
     version="1.0.0",
     description="Vector and attribute search service for video frames, vehicles, and persons."
 )
+
+app.include_router(dsai_watchlist_router)
 
 # --- CONFIGURATION ---
 MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-standalone")

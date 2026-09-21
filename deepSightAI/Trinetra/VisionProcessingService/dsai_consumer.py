@@ -217,6 +217,7 @@ class VisionProcessingConsumer:
                             attributes=dsai_det.get("attributes", {}),
                             has_plate_read=False,
                             plate_number=None,
+                            reid_embedding=dsai_raw_emb,
                         )
                         dsai_emitted_events.append(dsai_obj_event)
 
@@ -293,6 +294,7 @@ class VisionProcessingConsumer:
                             has_plate_read=dsai_has_plate,
                             plate_number=dsai_plate,
                             plate_candidate_id=dsai_plate_candidate_id if dsai_has_plate else None,
+                            reid_embedding=dsai_raw_emb,
                         )
                         dsai_emitted_events.append(dsai_obj_event)
 

@@ -108,7 +108,10 @@ class _DeepSightAliasFinder(MetaPathFinder):
         "audit_service": "deepSightAI.Trinetra.AuditService.audit_service",
         "UI": "deepSightAI.Trinetra.UI",
         "VisionProcessingService": "deepSightAI.Trinetra.VisionProcessingService",
+        "WatchlistMatcherService": "deepSightAI.Trinetra.WatchlistMatcherService",
+        "watchlist_matcher_service": "deepSightAI.Trinetra.WatchlistMatcherService",
     }
+
 
     def find_spec(self, fullname, path, target=None):
         if fullname in self.MAP:

@@ -11,6 +11,7 @@ from .Schema import (
     EmbedderProcessingStarted,
     EmbedderProcessingCompleted,
     ObjectDetectedEvent,
+    WatchlistAlertEvent,
 )
 from .Replay import ReplayService
 from .RedisClient import create_redis_client, test_connection
@@ -24,7 +25,9 @@ __all__ = [
     "EmbedderProcessingStarted",
     "EmbedderProcessingCompleted",
     "ObjectDetectedEvent",
+    "WatchlistAlertEvent",
     "ReplayService",
     "create_redis_client",
     "test_connection",
 ]
+

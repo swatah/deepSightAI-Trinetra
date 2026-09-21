@@ -36,6 +36,8 @@ except ImportError:
 SERVER_HOST = os.getenv("SERVER_HOST", "localhost")
 API_URL = os.getenv("API_URL", f"http://{SERVER_HOST}:8080")
 QUERY_API_URL = os.getenv("QUERY_API_URL", f"http://{SERVER_HOST}:8081")
+ALERT_API_URL = os.getenv("ALERT_API_URL", QUERY_API_URL)
+WATCHLIST_API_URL = os.getenv("WATCHLIST_API_URL", QUERY_API_URL)
 MINIO_URL = os.getenv("MINIO_URL", f"{SERVER_HOST}:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
@@ -43,6 +45,27 @@ VIDEO_BUCKET = os.getenv("VIDEO_BUCKET", "videos")
 FRAME_BUCKET = os.getenv("FRAME_BUCKET", "frames")
 DEFAULT_TENANT_ID = os.getenv("TENANT_ID", "default")
 DEFAULT_AUTH_TOKEN = os.getenv("AUTH_TOKEN", "")
+
+
+def check_user_permission(permission: str) -> bool:
+    """Check if the current token has the required permission or admin role (UI-89)."""
+    token = st.session_state.get("auth_token", DEFAULT_AUTH_TOKEN)
+    if not token:
+        return True
+    try:
+        from jose import jwt
+        claims = jwt.get_unverified_claims(token)
+        roles = claims.get("roles", [])
+        if not isinstance(roles, list):
+            roles = [roles] if roles else []
+        permissions = claims.get("permissions", [])
+        if not isinstance(permissions, list):
+            permissions = [permissions] if permissions else []
+        all_perms = set(roles + permissions)
+        return "admin" in all_perms or permission in all_perms
+    except Exception:
+        return True
+
 
 # Page Setup
 st.set_page_config(
@@ -195,13 +218,16 @@ with st.sidebar:
 st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 st.title("Visual Search Engine")
 
-tab_text, tab_vehicle, tab_person, tab_image, tab_plate = st.tabs([
+tab_text, tab_vehicle, tab_person, tab_image, tab_plate, tab_watchlist, tab_alerts = st.tabs([
     "🔍 Text Search",
     "🚗 Vehicle Search",
     "👤 Person Search",
     "🖼️ Image Search",
-    "🔢 Plate Search"
+    "🔢 Plate Search",
+    "📋 Watchlists",
+    "🚨 Live Alerts"
 ])
+
 
 results: List[Dict[str, Any]] = []
 
@@ -388,6 +414,159 @@ with tab_plate:
                     st.error(f"Plate search error ({res.status_code}): {res.text}")
             except Exception as e:
                 st.error(f"Connection error: {e}")
+
+# --- TAB 6: WATCHLIST MANAGEMENT (UI-89) ---
+with tab_watchlist:
+    st.subheader("Watchlist Management (BOLOs)")
+    can_write_watchlist = check_user_permission("watchlist:write")
+
+    if can_write_watchlist:
+        with st.expander("➕ Add New Watchlist Target", expanded=False):
+            with st.form("form_add_watchlist"):
+                w_col1, w_col2, w_col3 = st.columns(3)
+                with w_col1:
+                    w_type = st.selectbox(
+                        "Target Type",
+                        ["plate", "person_reid", "vehicle_reid"],
+                        format_func=lambda x: {"plate": "License Plate", "person_reid": "Person Re-ID", "vehicle_reid": "Vehicle Re-ID"}.get(x, x)
+                    )
+                with w_col2:
+                    w_label = st.text_input("Label / Description / Case ID *", placeholder="e.g. Stolen Blue Sedan, Suspect Case #402")
+                with w_col3:
+                    w_priority = st.selectbox("Alert Priority", ["medium", "high", "critical", "low"])
+
+                w_plate = None
+                w_ref_pk = None
+                if w_type == "plate":
+                    w_plate = st.text_input("Target License Plate *", placeholder="e.g. MH12AB1234")
+                else:
+                    w_ref_pk = st.text_input("Reference Object PK", placeholder="e.g. det_cam1_123456_0")
+
+                submit_watchlist = st.form_submit_button("Create Watchlist Entry", type="primary")
+                if submit_watchlist:
+                    if not w_label:
+                        st.error("Label is required.")
+                    elif w_type == "plate" and not w_plate:
+                        st.error("License plate is required for plate watchlist.")
+                    else:
+                        payload = {
+                            "entry_type": w_type,
+                            "label": w_label,
+                            "priority": w_priority,
+                            "plate_text": w_plate,
+                            "reid_reference_pk": w_ref_pk,
+                            "active": True
+                        }
+                        try:
+                            res = requests.post(f"{WATCHLIST_API_URL}/watchlist", json=payload, headers=get_auth_headers(), timeout=10)
+                            if res.status_code in (200, 201):
+                                st.success("Watchlist entry created successfully!")
+                            elif res.status_code == 403:
+                                st.error("Permission denied (403): Missing 'watchlist:write' permission.")
+                            else:
+                                st.error(f"Failed to create entry ({res.status_code}): {res.text}")
+                        except Exception as e:
+                            st.error(f"Connection error: {e}")
+    else:
+        st.info("ℹ️ Read-only view: 'watchlist:write' permission is required to add or modify watchlist entries.")
+
+    # List active watchlist entries
+    st.markdown("### Active Watchlist Entries")
+    try:
+        w_list_res = requests.get(f"{WATCHLIST_API_URL}/watchlist", headers=get_auth_headers(), timeout=10)
+        if w_list_res.status_code == 200:
+            w_entries = w_list_res.json()
+            if w_entries:
+                for entry in w_entries:
+                    w_badge_color = "#ef4444" if entry.get("priority") == "critical" else "#f97316" if entry.get("priority") == "high" else "#3b82f6"
+                    st.markdown(
+                        f"<div class='frame-card'>"
+                        f"<strong>#{entry['id']} - {entry['label']}</strong> "
+                        f"<span class='frame-badge' style='background:{w_badge_color};color:#fff;'>{entry.get('priority', 'medium').upper()}</span> "
+                        f"<span class='frame-badge'>Type: {entry.get('entry_type')}</span> "
+                        f"<span class='frame-badge'>Status: {'ACTIVE' if entry.get('active') else 'INACTIVE'}</span>"
+                        f"<br/><small>Plate: {entry.get('plate_text_norm') or 'N/A'} | Ref PK: {entry.get('reid_reference_pk') or 'N/A'} | Created: {entry.get('created_at', '')[:19]}</small>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                    if can_write_watchlist:
+                        col_btn1, col_btn2 = st.columns([1, 8])
+                        with col_btn1:
+                            if st.button("Delete", key=f"del_wl_{entry['id']}"):
+                                del_res = requests.delete(f"{WATCHLIST_API_URL}/watchlist/{entry['id']}", headers=get_auth_headers(), timeout=5)
+                                if del_res.status_code == 200:
+                                    st.success(f"Entry #{entry['id']} deleted")
+                                    st.rerun()
+            else:
+                st.info("No watchlist entries configured for this tenant.")
+        elif w_list_res.status_code == 401:
+            st.error("Authentication required (401). Please supply a valid JWT token.")
+        else:
+            st.error(f"Could not load watchlist entries ({w_list_res.status_code}): {w_list_res.text}")
+    except Exception as e:
+        st.error(f"Error fetching watchlists: {e}")
+
+# --- TAB 7: LIVE ALERTS (UI-90) ---
+with tab_alerts:
+    st.subheader("🚨 Live Alerts & Monitoring (UI-90)")
+    col_a1, col_a2, col_a3 = st.columns([2, 2, 2])
+    with col_a1:
+        auto_poll = st.checkbox("Auto-poll every 5 seconds", value=False, key="chk_auto_poll")
+    with col_a2:
+        unack_only = st.checkbox("Unacknowledged only", value=False, key="chk_unack_only")
+    with col_a3:
+        btn_poll = st.button("🔄 Poll Alerts Now", key="btn_poll_alerts", type="secondary")
+
+    try:
+        poll_params = {"limit": 50, "unacknowledged_only": unack_only}
+        alerts_res = requests.get(f"{ALERT_API_URL}/alerts/poll", params=poll_params, headers=get_auth_headers(), timeout=10)
+        if alerts_res.status_code == 200:
+            alerts_data = alerts_res.json()
+            if alerts_data:
+                st.markdown(f"**Found {len(alerts_data)} alerts**")
+                for alert in alerts_data:
+                    st.markdown("<div class='frame-card'>", unsafe_allow_html=True)
+                    a_cols = st.columns([1, 3])
+                    with a_cols[0]:
+                        if alert.get("thumbnail_url"):
+                            st.image(alert["thumbnail_url"], use_column_width=True)
+                        else:
+                            st.caption("No crop preview")
+                    with a_cols[1]:
+                        score = alert.get("match_score", 0.0)
+                        matched_ts = alert.get("matched_at", "")[:19]
+                        cam = alert.get("camera_id", "cam-default")
+                        ack = alert.get("acknowledged", False)
+                        ack_by = alert.get("acknowledged_by")
+                        ack_at = alert.get("acknowledged_at", "")[:19] if alert.get("acknowledged_at") else ""
+
+                        st.markdown(
+                            f"<h4>Alert #{alert['id']} — Camera: {cam}</h4>"
+                            f"<p><strong>Match Score:</strong> {score:.2f} | <strong>Time:</strong> {matched_ts} | <strong>Watchlist Entry:</strong> #{alert.get('watchlist_entry_id')}</p>",
+                            unsafe_allow_html=True
+                        )
+
+                        if ack:
+                            st.success(f"✅ Acknowledged by **{ack_by}** at {ack_at}")
+                        else:
+                            st.warning("⚠️ PENDING OPERATOR REVIEW")
+                            if st.button(f"Acknowledge #{alert['id']}", key=f"ack_btn_{alert['id']}", type="primary"):
+                                ack_res = requests.patch(f"{ALERT_API_URL}/alerts/{alert['id']}/acknowledge", headers=get_auth_headers(), timeout=5)
+                                if ack_res.status_code == 200:
+                                    st.success(f"Alert #{alert['id']} acknowledged!")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Acknowledgment failed: {ack_res.text}")
+
+                    st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                st.info("No alerts found matching the criteria.")
+        elif alerts_res.status_code == 401:
+            st.error("Authentication required (401). Please supply a valid JWT token.")
+        else:
+            st.error(f"Error fetching alerts ({alerts_res.status_code}): {alerts_res.text}")
+    except Exception as e:
+        st.error(f"Alert connection error: {e}")
 
 
 # --- RESULTS DISPLAY (UI-88, UI-91, UI-93) ---
