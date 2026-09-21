@@ -143,7 +143,7 @@ def dsai_get_tenant_schemas(connection=None) -> list:
         safe_tenant = "".join(c for c in target_tenant if c.isalnum() or c == "_")
         return [f"tenant_{safe_tenant}"]
 
-    schemas = ["public", "tenant_default"]
+    schemas = ["public", "tenant_default", "trinetra_plates"]
     if connection is not None:
         try:
             result = connection.execute(

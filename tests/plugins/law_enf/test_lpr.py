@@ -26,17 +26,11 @@ class TestLPRPlugin:
 
     def create_frame_with_plate(self, plate_text: str, frame_size=(640, 480, 3)):
         """
-        Helper to create a synthetic frame with plate number encoded.
-        The plate number is written as ASCII values in the first row pixels.
-        This simulates a frame containing a plate; the plugin will extract it.
+        Helper to create a sample license plate image for testing.
+        Uses visual character rendering instead of ASCII pixel encoding (VP-18, TEST-81).
         """
-        frame = np.zeros(frame_size, dtype=np.uint8)
-        # Encode plate text in the first row, one character per pixel in R channel
-        for i, char in enumerate(plate_text):
-            if i < frame_size[1]:
-                # Store ASCII code in red channel of first row
-                frame[0, i, 0] = ord(char)
-        return frame
+        from deepSightAI.Trinetra.VisionProcessingService.plugins.dsai_lpr import dsai_create_sample_plate_image
+        return dsai_create_sample_plate_image(plate_text)
 
     def test_plugin_interface(self, lpr_plugin_class):
         """LPR plugin must inherit DetectionPlugin and define attributes."""

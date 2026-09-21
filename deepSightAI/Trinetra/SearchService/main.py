@@ -13,6 +13,7 @@ Provides:
 """
 
 import os
+import sys
 import io
 import json
 import base64
@@ -44,6 +45,7 @@ from deepSightAI.Trinetra.Shared.Milvus import (
     connect_milvus_with_retry,
 )
 from deepSightAI.Trinetra.Shared.Repositories.CameraRepository import CameraRepository
+from deepSightAI.Trinetra.Shared.Repositories.PlateRepository import PlateRepository, dsai_trigram_similarity
 
 logger = dsai_get_logger("deepSightAI.Trinetra.SearchService")
 
@@ -76,7 +78,12 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 try:
     import open_clip
-    tokenizer = open_clip.get_tokenizer("ViT-B-32")
+    try:
+        if "pytest" not in sys.modules and os.getenv("TESTING") != "1":
+            tokenizer = open_clip.get_tokenizer("ViT-B-32")
+    except Exception as tok_err:
+        logger.warning(f"Could not load OpenCLIP tokenizer: {tok_err}")
+        tokenizer = None
     if USE_ONNX and os.path.exists(ONNX_MODEL_PATH):
         import onnxruntime as ort
         providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if torch.cuda.is_available() else ['CPUExecutionProvider']
@@ -199,6 +206,19 @@ class PersonSearchRequest(BaseModel):
     time_start: Optional[float] = None
     time_end: Optional[float] = None
     reference_image_base64: Optional[str] = None
+    top_k: int = Field(default=10, ge=1, le=100)
+    tenant_id: str = "default"
+
+
+class PlateSearchRequest(BaseModel):
+    """License plate search request (SR-38, SR-44)."""
+    plate_number: str = Field(..., min_length=1, description="License plate query string")
+    exact: bool = Field(default=True, description="True for exact match, False for fuzzy similarity")
+    mode: Optional[str] = Field(default=None, description="'exact' or 'fuzzy'")
+    camera_ids: Optional[List[str]] = None
+    time_start: Optional[float] = None
+    time_end: Optional[float] = None
+    similarity_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
     top_k: int = Field(default=10, ge=1, le=100)
     tenant_id: str = "default"
 
@@ -609,6 +629,76 @@ async def search_person(
     except Exception as e:
         logger.error(f"Search error in /search/person: {e}")
         return []
+
+
+@app.post("/search/plate", response_model=List[SearchResult])
+async def search_plate(
+    request: PlateSearchRequest,
+    current_user: Dict = Depends(dsai_require_search_read),
+):
+    """
+    License plate search supporting both exact (LIKE/equality) and fuzzy (similarity) search (SR-38).
+    Ranks exact and OCR-confused plate reads (e.g. 0/O, 1/I) by trigram similarity.
+    Enforces fail-closed require_auth and 'search:read' permission (SR-43).
+    """
+    try:
+        tenant_id = current_user.get("tenant_id") or request.tenant_id
+        query_text = request.plate_number.strip()
+        if not query_text:
+            return []
+
+        is_fuzzy = (request.mode == "fuzzy") or (not request.exact and request.mode != "exact")
+        repo = PlateRepository(tenant_id)
+
+        if is_fuzzy:
+            reads = repo.search_fuzzy(
+                plate_query=query_text,
+                camera_ids=request.camera_ids,
+                time_start=request.time_start,
+                time_end=request.time_end,
+                similarity_threshold=request.similarity_threshold,
+                limit=request.top_k,
+            )
+        else:
+            reads = repo.search_exact(
+                plate_text_norm=query_text,
+                camera_ids=request.camera_ids,
+                time_start=request.time_start,
+                time_end=request.time_end,
+                limit=request.top_k,
+            )
+
+        search_results: List[SearchResult] = []
+        for read in reads:
+            cpath = read.crop_path or ""
+            score_val = getattr(read, "similarity", 1.0 if not is_fuzzy else 0.0)
+            search_results.append(SearchResult(
+                video_id=read.video_id,
+                crop_path=cpath,
+                score=float(round(score_val, 3)),
+                camera_id=read.camera_id,
+                frame_timestamp=read.frame_timestamp,
+                object_class="vehicle",
+                has_plate_read=True,
+                plate_number=read.plate_text_norm,
+                thumbnail_url=dsai_generate_presigned_url(cpath),
+                attributes={
+                    "plate_text_raw": read.plate_text_raw,
+                    "plate_text_norm": read.plate_text_norm,
+                    "ocr_confidence": read.ocr_confidence,
+                    "ocr_engine": read.ocr_engine,
+                    "video_object_pk": read.video_object_pk,
+                }
+            ))
+
+        return search_results
+
+    except Exception as e:
+        logger.error(f"Search error in /search/plate: {e}")
+        return []
+
+
+dsai_search_plate = search_plate
 
 
 if __name__ == "__main__":

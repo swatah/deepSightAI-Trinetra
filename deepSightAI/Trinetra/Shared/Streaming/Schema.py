@@ -109,4 +109,5 @@ class ObjectDetectedEvent(BaseModel):
     attributes: Optional[dict] = Field(default_factory=dict)
     has_plate_read: bool = False
     plate_number: Optional[str] = None
+    plate_candidate_id: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)

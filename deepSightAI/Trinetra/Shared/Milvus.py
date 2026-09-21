@@ -356,6 +356,7 @@ def ensure_vehicle_collection(
         FieldSchema(name="vehicle_type", dtype=DataType.VARCHAR, max_length=64),
         FieldSchema(name="has_plate_read", dtype=DataType.BOOL),
         FieldSchema(name="plate_number", dtype=DataType.VARCHAR, max_length=64),
+        FieldSchema(name="plate_candidate_id", dtype=DataType.VARCHAR, max_length=255),
         FieldSchema(name="bbox_x1", dtype=DataType.FLOAT),
         FieldSchema(name="bbox_y1", dtype=DataType.FLOAT),
         FieldSchema(name="bbox_x2", dtype=DataType.FLOAT),
@@ -380,8 +381,8 @@ def ensure_vehicle_collection(
     }
     collection.create_index(field_name="embedding", index_params=index_params)
 
-    # Scalar indexes (DM-2, DM-4)
-    for scalar_field in ["camera_id", "frame_timestamp", "object_class", "color", "vehicle_type", "has_plate_read", "tenant_id"]:
+    # Scalar indexes (DM-2, DM-4, VP-21)
+    for scalar_field in ["camera_id", "frame_timestamp", "object_class", "color", "vehicle_type", "has_plate_read", "plate_candidate_id", "tenant_id"]:
         try:
             collection.create_index(field_name=scalar_field, index_params={})
         except Exception as e:

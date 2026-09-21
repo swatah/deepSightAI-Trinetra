@@ -225,8 +225,29 @@ class VisionProcessingConsumer:
                         dsai_attr = self._dsai_attribute_plugin.extract_attributes(dsai_det)
                         dsai_color = dsai_det.get("color") or dsai_attr.get("color", "red")
                         dsai_type = dsai_det.get("vehicle_type") or dsai_attr.get("vehicle_type", "sedan")
-                        dsai_has_plate = bool(dsai_det.get("has_plate_read", False))
+                        dsai_has_plate = bool(dsai_det.get("has_plate_read", False)) or bool(dsai_det.get("plate_number"))
                         dsai_plate = dsai_det.get("plate_number")
+                        dsai_plate_candidate_id = dsai_det.get("plate_candidate_id") or (f"plate_cand_{dsai_pk}" if dsai_has_plate else "")
+
+                        # On vehicle detection with plate: insert plate_reads with unique constraint on video_object_pk (VP-21)
+                        if dsai_has_plate and dsai_plate:
+                            try:
+                                from deepSightAI.Trinetra.Shared.Repositories.PlateRepository import PlateRepository
+                                dsai_plate_repo = PlateRepository(dsai_tenant_id)
+                                dsai_plate_repo.create(
+                                    video_object_pk=dsai_pk,
+                                    video_id=dsai_video_id,
+                                    camera_id=dsai_camera_id,
+                                    frame_timestamp=float(dsai_timestamp),
+                                    plate_text_raw=str(dsai_det.get("plate_text_raw") or dsai_plate),
+                                    plate_text_norm=str(dsai_plate),
+                                    ocr_confidence=float(dsai_det.get("plate_confidence", dsai_conf)),
+                                    ocr_engine=str(dsai_det.get("ocr_engine", "pp-ocrv3")),
+                                    crop_path=dsai_crop_path or None
+                                )
+                            except Exception as dsai_pr_err:
+                                logger.error(f"Plate read persistence failed for {dsai_pk}: {dsai_pr_err}")
+                                raise StorageError(f"Plate read persistence failed for {dsai_pk}: {dsai_pr_err}")
 
                         dsai_coll = ensure_vehicle_collection(dsai_tenant_id, embedding_dim=len(dsai_raw_emb))
                         try:
@@ -244,6 +265,7 @@ class VisionProcessingConsumer:
                                 [dsai_type],
                                 [dsai_has_plate],
                                 [dsai_plate or ""],
+                                [dsai_plate_candidate_id],
                                 [float(dsai_bbox[0])],
                                 [float(dsai_bbox[1])],
                                 [float(dsai_bbox[2])],
@@ -270,6 +292,46 @@ class VisionProcessingConsumer:
                             attributes={"color": dsai_color, "vehicle_type": dsai_type},
                             has_plate_read=dsai_has_plate,
                             plate_number=dsai_plate,
+                            plate_candidate_id=dsai_plate_candidate_id if dsai_has_plate else None,
+                        )
+                        dsai_emitted_events.append(dsai_obj_event)
+
+                    elif dsai_class == "plate":
+                        dsai_plate = dsai_det.get("plate_number")
+                        if dsai_plate:
+                            try:
+                                from deepSightAI.Trinetra.Shared.Repositories.PlateRepository import PlateRepository
+                                dsai_plate_repo = PlateRepository(dsai_tenant_id)
+                                dsai_plate_repo.create(
+                                    video_object_pk=dsai_pk,
+                                    video_id=dsai_video_id,
+                                    camera_id=dsai_camera_id,
+                                    frame_timestamp=float(dsai_timestamp),
+                                    plate_text_raw=str(dsai_det.get("plate_text_raw") or dsai_plate),
+                                    plate_text_norm=str(dsai_plate),
+                                    ocr_confidence=float(dsai_det.get("confidence", dsai_conf)),
+                                    ocr_engine=str(dsai_det.get("ocr_engine", "pp-ocrv3")),
+                                    crop_path=dsai_crop_path or None
+                                )
+                            except Exception as dsai_pr_err:
+                                logger.error(f"Standalone plate read persistence failed for {dsai_pk}: {dsai_pr_err}")
+                                raise StorageError(f"Standalone plate read persistence failed for {dsai_pk}: {dsai_pr_err}")
+
+                        dsai_obj_event = ObjectDetectedEvent(
+                            video_object_pk=dsai_pk,
+                            tenant_id=dsai_tenant_id,
+                            camera_id=dsai_camera_id,
+                            video_id=dsai_video_id,
+                            frame_timestamp=float(dsai_timestamp),
+                            frame_path=dsai_frame_path,
+                            crop_path=dsai_crop_path if dsai_crop_path else None,
+                            object_class=dsai_class,
+                            confidence=dsai_conf,
+                            bbox=dsai_bbox,
+                            attributes={"plate_number": dsai_plate},
+                            has_plate_read=True,
+                            plate_number=dsai_plate,
+                            plate_candidate_id=f"plate_{dsai_pk}",
                         )
                         dsai_emitted_events.append(dsai_obj_event)
 

@@ -195,11 +195,12 @@ with st.sidebar:
 st.markdown("<div class='main-content'>", unsafe_allow_html=True)
 st.title("Visual Search Engine")
 
-tab_text, tab_vehicle, tab_person, tab_image = st.tabs([
+tab_text, tab_vehicle, tab_person, tab_image, tab_plate = st.tabs([
     "🔍 Text Search",
     "🚗 Vehicle Search",
     "👤 Person Search",
-    "🖼️ Image Search"
+    "🖼️ Image Search",
+    "🔢 Plate Search"
 ])
 
 results: List[Dict[str, Any]] = []
@@ -334,6 +335,60 @@ with tab_image:
             except Exception as e:
                 st.error(f"Connection error: {e}")
 
+# --- TAB 5: PLATE SEARCH (UI-86) ---
+with tab_plate:
+    st.subheader("License Plate Recognition (LPR) Search (UI-86)")
+    p_col1, p_col2 = st.columns([2, 1])
+    with p_col1:
+        plate_input = st.text_input(
+            "License Plate Number",
+            placeholder="e.g. KA01AB1234, MH12DE1432, 7XYZ123",
+            key="plate_input_field"
+        )
+    with p_col2:
+        plate_mode = st.radio(
+            "Match Mode",
+            ["Exact Match", "Fuzzy Search (Trigram)"],
+            horizontal=True,
+            key="plate_mode_radio"
+        )
+
+    plate_sim_threshold = 0.3
+    if "Fuzzy" in plate_mode:
+        plate_sim_threshold = st.slider(
+            "Similarity Threshold",
+            min_value=0.1,
+            max_value=1.0,
+            value=0.3,
+            step=0.05,
+            key="plate_sim_slider"
+        )
+
+    if st.button("Search Plates", key="btn_search_plate", type="primary") and plate_input.strip():
+        payload = {
+            "plate_number": plate_input.strip(),
+            "exact": "Exact" in plate_mode,
+            "mode": "exact" if "Exact" in plate_mode else "fuzzy",
+            "similarity_threshold": plate_sim_threshold,
+            "camera_ids": [selected_camera_id] if selected_camera_id else None,
+            "time_start": time_start,
+            "time_end": time_end,
+            "top_k": top_k,
+            "tenant_id": st.session_state.tenant_id
+        }
+        with st.spinner("Searching license plate records..."):
+            try:
+                res = requests.post(f"{QUERY_API_URL}/search/plate", json=payload, headers=get_auth_headers(), timeout=15)
+                if res.status_code == 200:
+                    results = res.json()
+                    st.session_state.last_results = results
+                elif res.status_code == 401:
+                    st.error("Authentication required (401). Please supply a valid JWT token.")
+                else:
+                    st.error(f"Plate search error ({res.status_code}): {res.text}")
+            except Exception as e:
+                st.error(f"Connection error: {e}")
+
 
 # --- RESULTS DISPLAY (UI-88, UI-91, UI-93) ---
 st.markdown("---")
@@ -365,6 +420,8 @@ if display_results:
                 badges_html += f"<span class='frame-badge'>{hit['color'].title()}</span>"
             if hit.get("vehicle_type"):
                 badges_html += f"<span class='frame-badge'>{hit['vehicle_type'].title()}</span>"
+            if hit.get("plate_number"):
+                badges_html += f"<span class='frame-badge' style='background-color:#dbeafe;color:#1e40af;'>Plate: {hit['plate_number']}</span>"
 
             st.markdown(f"<div style='margin-top:0.5rem;'>{badges_html}</div>", unsafe_allow_html=True)
             st.markdown("</div>", unsafe_allow_html=True)

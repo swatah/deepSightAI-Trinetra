@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import logging
 import tempfile
@@ -127,7 +128,7 @@ if not USE_ONNX or not os.path.exists(ONNX_MODEL_PATH):
         model, _, preprocess = open_clip.create_model_and_transforms(
             "ViT-B-32", pretrained=local_pytorch_model
         )
-    else:
+    elif "pytest" not in sys.modules and os.getenv("TESTING") != "1":
         logger.info("Using online pretrained model: laion2b_s34b_b79k")
         try:
             model, _, preprocess = open_clip.create_model_and_transforms(
