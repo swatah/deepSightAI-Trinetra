@@ -24,6 +24,11 @@ const dsai_nextConfig = {
         source: "/api/backend/watchlist/:path*",
         destination: `${process.env.WATCHLIST_SERVICE_URL || "http://watchlist-matcher:8083"}/:path*`,
       },
+      // Alias: /api/backend/extractor/* also proxies to ServerAndExtractor (main-api)
+      {
+        source: "/api/backend/extractor/:path*",
+        destination: `${process.env.SERVER_SERVICE_URL || "http://main-api:8080"}/:path*`,
+      },
     ];
   },
 };
