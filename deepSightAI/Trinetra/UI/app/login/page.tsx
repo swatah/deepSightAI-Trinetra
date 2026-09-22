@@ -36,7 +36,17 @@ type DsaiLoginFormValues = z.infer<typeof dsai_loginSchema>;
 export default function DsaiLoginPage() {
   const dsai_router = useRouter();
   const dsai_searchParams = useSearchParams();
-  const dsai_callbackUrl = dsai_searchParams.get("callbackUrl") || "/";
+
+  /**
+   * dsai_safeCallbackUrl — guards against CWE-601 open-redirect.
+   * Accepts only app-relative paths (start with '/' but not '//').
+   * Any external URL or protocol-relative reference falls back to '/'.
+   */
+  const dsai_rawCallbackUrl = dsai_searchParams.get("callbackUrl") ?? "/";
+  const dsai_safeCallbackUrl =
+    dsai_rawCallbackUrl.startsWith("/") && !dsai_rawCallbackUrl.startsWith("//")
+      ? dsai_rawCallbackUrl
+      : "/";
 
   const [dsai_showPassword, dsai_setShowPassword] = useState(false);
   const [dsai_errorMessage, dsai_setErrorMessage] = useState<string | null>(null);
@@ -70,8 +80,8 @@ export default function DsaiLoginPage() {
       return;
     }
 
-    // Successful login — redirect to the originally requested page (or home)
-    dsai_router.push(dsai_callbackUrl);
+    // Successful login — redirect to the sanitised callback path (or home)
+    dsai_router.push(dsai_safeCallbackUrl);
     dsai_router.refresh();
   };
 
