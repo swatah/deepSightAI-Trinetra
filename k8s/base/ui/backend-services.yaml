@@ -1,0 +1,57 @@
+---
+# auth-service ClusterIP — enables in-cluster DNS: http://auth-service:8002
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  labels:
+    app.kubernetes.io/name: auth-service
+    app.kubernetes.io/instance: deepSightAI-Trinetra
+    app.kubernetes.io/component: backend
+spec:
+  selector:
+    app: auth-service
+  ports:
+  - port: 8002
+    targetPort: 8002
+    name: http
+    protocol: TCP
+  type: ClusterIP
+---
+# search-service ClusterIP — enables in-cluster DNS: http://search-service:8081
+apiVersion: v1
+kind: Service
+metadata:
+  name: search-service
+  labels:
+    app.kubernetes.io/name: search-service
+    app.kubernetes.io/instance: deepSightAI-Trinetra
+    app.kubernetes.io/component: backend
+spec:
+  selector:
+    app: search-service
+  ports:
+  - port: 8081
+    targetPort: 8081
+    name: http
+    protocol: TCP
+  type: ClusterIP
+---
+# watchlist-matcher ClusterIP — enables in-cluster DNS: http://watchlist-matcher:8083
+apiVersion: v1
+kind: Service
+metadata:
+  name: watchlist-matcher
+  labels:
+    app.kubernetes.io/name: watchlist-matcher
+    app.kubernetes.io/instance: deepSightAI-Trinetra
+    app.kubernetes.io/component: backend
+spec:
+  selector:
+    app: watchlist-matcher
+  ports:
+  - port: 8083
+    targetPort: 8083
+    name: http
+    protocol: TCP
+  type: ClusterIP
