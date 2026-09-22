@@ -5,10 +5,28 @@ resources:
 - ../../base/ui
 - ingress.yaml
 
-# Production patches: keep HPA active and production-ready resource limits
-patchesStrategicMerge:
-- replicas-patch.yaml
-- resources-patch.yaml
+# Production patches — scoped to trinetra-ui only (base/ui has no other Deployments)
+patches:
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 3
+  target:
+    kind: Deployment
+    name: trinetra-ui
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "500m"
+          memory: "512Mi"
+        limits:
+          cpu: "2000m"
+          memory: "1Gi"
+  target:
+    kind: Deployment
+    name: trinetra-ui
 
 # Production ConfigMap overrides
 configMapGenerator:
@@ -19,12 +37,12 @@ configMapGenerator:
   - NODE_ENV=production
   - NEXTAUTH_URL=https://trinetra.swatah.ai
 
-# Production secrets — must be provided via CI/CD env vars
+# Production secrets — must be provided via CI/CD env vars (never committed in plaintext)
 secretGenerator:
 - name: trinetra-ui-secrets
   literals:
   - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
   - SENTRY_DSN=${SENTRY_DSN}
 
-options:
+generatorOptions:
   disableNameSuffixHash: true

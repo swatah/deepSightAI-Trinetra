@@ -33,6 +33,7 @@ spec:
             name: trinetra-ui-config
         - secretRef:
             name: trinetra-ui-secrets
+            optional: true
         securityContext:
           runAsNonRoot: true
           runAsUser: 1001

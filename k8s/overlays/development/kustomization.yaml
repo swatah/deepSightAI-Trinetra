@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../base/ui
+
+# Development: run only 1 replica to save resources on dev nodes
+patches:
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 1
+  target:
+    kind: Deployment
+    name: trinetra-ui
+
+# Development ConfigMap overrides: debug logging and local backend endpoints
+configMapGenerator:
+- name: trinetra-ui-config
+  behavior: merge
+  literals:
+  - LOG_LEVEL=debug
+  - NODE_ENV=development
+  - AUTH_SERVICE_URL=http://localhost:8002
+  - SEARCH_SERVICE_URL=http://localhost:8081
+  - WATCHLIST_SERVICE_URL=http://localhost:8083
+  - SERVER_SERVICE_URL=http://localhost:8080
+  - NEXTAUTH_URL=http://localhost:3000
+
+# Dev secret with placeholder values — prevents CreateContainerConfigError.
+# Replace with real values in a local .env or via kubectl create secret.
+secretGenerator:
+- name: trinetra-ui-secrets
+  literals:
+  - NEXTAUTH_SECRET=dev-secret-replace-me
+  - SENTRY_DSN=
+
+generatorOptions:
+  disableNameSuffixHash: true
