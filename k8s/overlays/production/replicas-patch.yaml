@@ -25,3 +25,10 @@ metadata:
   name: embedder
 spec:
   replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trinetra-ui
+spec:
+  replicas: 3

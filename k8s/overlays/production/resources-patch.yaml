@@ -65,3 +65,20 @@ spec:
           limits:
             memory: "8Gi"
             cpu: "4000m"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trinetra-ui
+spec:
+  template:
+    spec:
+      containers:
+      - name: trinetra-ui
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "2000m"
