@@ -67,16 +67,8 @@ nav:
       - Docker Compose: installation/docker-compose.md
       - Kubernetes: installation/kubernetes.md
       - Cloud (AWS/GCP/Azure): installation/cloud.md
-  - User Guide:
-      - Overview: user-guide/index.md
-      - Uploading Videos: user-guide/uploading.md
-      - Searching: user-guide/searching.md
-      - API Reference: user-guide/api.md
   - Architecture:
-      - Overview: architecture/index.md
-      - Components: architecture/components.md
       - Security: architecture/security.md
-      - Diagrams: architecture/diagrams.md
   - Operations:
       - Monitoring: operations/monitoring.md
       - Backup & Restore: operations/backup-restore.md
@@ -86,7 +78,6 @@ nav:
       - Glossary: reference/glossary.md
       - Configuration: reference/configuration.md
   - About:
-      - Roadmap: about/roadmap.md
       - Contributing: about/contributing.md
       - License: about/license.md
 
