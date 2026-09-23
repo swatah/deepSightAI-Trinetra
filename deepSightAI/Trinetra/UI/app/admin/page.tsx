@@ -16,6 +16,8 @@ import {
   ToggleRight,
 } from "lucide-react";
 import { dsai_isAdmin } from "@/lib/auth/dsai_rbac";
+import { SectorBadge } from "@/components/tenant/SectorBadge";
+import { QuotaUsageDisplay } from "@/components/tenant/QuotaUsageDisplay";
 
 interface TenantRecord {
   id: string;
@@ -311,8 +313,8 @@ export default function AdminPage() {
                   <tr key={dsai_tenant.id} className="hover:bg-slate-800/40 transition-colors">
                     <td className="px-6 py-4 font-semibold text-white">{dsai_tenant.name}</td>
                     <td className="px-6 py-4 font-mono text-slate-400">{dsai_tenant.slug}</td>
-                    <td className="px-6 py-4 capitalize text-slate-300">
-                      {dsai_tenant.sector.replace("_", " ")}
+                    <td className="px-6 py-4">
+                      <SectorBadge dsai_sector={dsai_tenant.sector} dsai_size="sm" />
                     </td>
                     <td className="px-6 py-4">
                       <span
@@ -347,6 +349,12 @@ export default function AdminPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Quota & Resource Usage Overview */}
+          <QuotaUsageDisplay
+            dsai_informational={true}
+            dsai_title="Multi-Tenant Resource Quotas & Allocation"
+          />
         </div>
       )}
 

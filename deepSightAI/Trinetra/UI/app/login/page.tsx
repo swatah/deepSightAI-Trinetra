@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { useForm } from "react-hook-form";
@@ -33,7 +33,7 @@ type DsaiLoginFormValues = z.infer<typeof dsai_loginSchema>;
  * - Loading spinner during authentication request
  * - Responsive across mobile, tablet, and desktop viewports
  */
-export default function DsaiLoginPage() {
+function DsaiLoginForm() {
   const dsai_router = useRouter();
   const dsai_searchParams = useSearchParams();
 
@@ -239,3 +239,18 @@ export default function DsaiLoginPage() {
     </div>
   );
 }
+
+export default function DsaiLoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[500px] flex items-center justify-center text-slate-400 font-mono text-sm">
+          Loading login portal...
+        </div>
+      }
+    >
+      <DsaiLoginForm />
+    </Suspense>
+  );
+}
+

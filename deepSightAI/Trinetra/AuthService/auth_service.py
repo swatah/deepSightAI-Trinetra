@@ -380,7 +380,7 @@ register_error_handlers(app)
 @app.get("/health")
 def health_check():
     """Health check endpoint (REL-63)."""
-    return {"status": "healthy", "service": "AuthService", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "ok", "service": "AuthService", "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/ready")
@@ -779,6 +779,43 @@ async def oauth_callback(provider: str, request: Request, db: Session = Depends(
 # - /auth/logout (token revocation)
 # - /auth/refresh (refresh tokens)
 # - /auth/me (user profile)
+
+
+@app.get("/tenants/{tenant_id}")
+def dsai_get_tenant(
+    tenant_id: str,
+    dsai_payload: dict = Depends(require_auth),
+    dsai_db: Session = Depends(get_db),
+):
+    """
+    Retrieve tenant profile, active status, and plugin configuration.
+
+    Supports querying by integer ID or URL-safe slug.
+    Accessible to users belonging to the tenant or platform administrators.
+    """
+    if tenant_id.isdigit():
+        dsai_tenant = dsai_db.query(Tenant).filter(Tenant.id == int(tenant_id)).first()
+    else:
+        dsai_tenant = dsai_db.query(Tenant).filter(Tenant.slug == tenant_id).first()
+
+    if not dsai_tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    dsai_user_tenant_id = dsai_payload.get("tenant_id")
+    dsai_roles = dsai_payload.get("roles", [])
+    dsai_is_admin = "admin" in dsai_roles
+    if dsai_user_tenant_id is not None and str(dsai_user_tenant_id) != str(dsai_tenant.id) and not dsai_is_admin:
+        raise HTTPException(status_code=403, detail="Access denied for this tenant")
+
+    return {
+        "id": str(dsai_tenant.id),
+        "name": dsai_tenant.name,
+        "slug": dsai_tenant.slug,
+        "description": dsai_tenant.description,
+        "active": dsai_tenant.active,
+        "created_at": dsai_tenant.created_at.isoformat() if dsai_tenant.created_at else None,
+        "plugin_config": dsai_tenant.plugin_config or {},
+    }
 
 
 @app.delete("/tenants/{tenant_id}")

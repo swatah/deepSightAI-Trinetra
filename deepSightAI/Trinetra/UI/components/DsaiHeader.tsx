@@ -6,6 +6,8 @@ import { Eye, Menu, X, Shield, Bell, Upload, Search, BarChart3, Video, Building2
 import { useState } from "react";
 import { useSession } from "next-auth/react";
 import { cn } from "@/lib/dsai_utils";
+import { useTenant } from "@/hooks/useTenant";
+import { SectorBadge } from "@/components/tenant/SectorBadge";
 
 /** Navigation items — shared between desktop and mobile menus */
 const dsai_navItems = [
@@ -13,7 +15,8 @@ const dsai_navItems = [
   { dsai_label: "Search", dsai_href: "/search/text", dsai_icon: Search },
   { dsai_label: "Alerts", dsai_href: "/alerts", dsai_icon: Bell },
   { dsai_label: "Watchlist", dsai_href: "/watchlist", dsai_icon: Shield },
-  { dsai_label: "Upload", dsai_href: "/upload", dsai_icon: Upload },
+  { dsai_label: "Upload", dsai_href: "/ingest", dsai_icon: Upload },
+  { dsai_label: "Streams", dsai_href: "/rtsp", dsai_icon: Video },
   { dsai_label: "Analytics", dsai_href: "/analytics", dsai_icon: BarChart3 },
   { dsai_label: "Admin", dsai_href: "/admin", dsai_icon: Building2 },
 ];
@@ -21,6 +24,7 @@ const dsai_navItems = [
 export function DsaiHeader() {
   const dsai_pathname = usePathname();
   const { data: dsai_session } = useSession();
+  const { dsai_tenant, dsai_sector } = useTenant();
   const [dsai_mobileOpen, dsai_setMobileOpen] = useState(false);
 
   return (
@@ -68,13 +72,14 @@ export function DsaiHeader() {
 
           {/* User Tenant Info (Desktop) */}
           <div className="hidden sm:flex items-center gap-3">
+            {dsai_sector && <SectorBadge dsai_sector={dsai_sector} dsai_size="sm" />}
             {dsai_session?.user && (
               <div className="text-right">
                 <div className="text-xs font-semibold text-white">
                   {dsai_session.user.name || dsai_session.user.email}
                 </div>
                 <div className="text-[10px] text-slate-400 font-mono">
-                  {(dsai_session as any).dsai_tenantId || "Tenant"}
+                  {dsai_tenant?.dsai_name || (dsai_session as any).dsai_tenantId || "Tenant"}
                 </div>
               </div>
             )}
@@ -102,12 +107,15 @@ export function DsaiHeader() {
                     {dsai_session.user.name || dsai_session.user.email}
                   </div>
                   <div className="text-slate-400 font-mono text-[11px]">
-                    Scope: {(dsai_session as any).dsai_tenantId || "Default"}
+                    Scope: {dsai_tenant?.dsai_name || (dsai_session as any).dsai_tenantId || "Default"}
                   </div>
                 </div>
-                <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[10px] font-mono uppercase">
-                  {((dsai_session as any).dsai_roles?.[0] as string) || "User"}
-                </span>
+                <div className="flex items-center gap-2">
+                  {dsai_sector && <SectorBadge dsai_sector={dsai_sector} dsai_size="sm" />}
+                  <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[10px] font-mono uppercase">
+                    {((dsai_session as any).dsai_roles?.[0] as string) || "User"}
+                  </span>
+                </div>
               </div>
             )}
 

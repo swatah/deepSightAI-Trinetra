@@ -27,15 +27,3 @@ spec:
         factor: 2
         maxDuration: 5m
     timeout: 15m
-  health:
-    healthRule:
-      get:
-        path: /api/ready
-        port: 3000
-        scheme: HTTP
-        timeout: 10
-    customHealthChecks:
-    - group: apps
-      kind: Deployment
-      name: trinetra-ui
-      unhealthy: {}

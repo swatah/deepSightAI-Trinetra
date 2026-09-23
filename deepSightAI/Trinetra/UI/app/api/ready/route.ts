@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { dsai_recordHttpRequest } from "@/lib/metrics";
+import { dsai_logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +36,7 @@ async function dsai_checkService(dsai_baseUrl: string): Promise<{ status: "ok" |
  * Readiness probe for Kubernetes: validates dependencies before admitting traffic.
  */
 export async function GET() {
+  const dsai_startTime = Date.now();
   const dsai_authUrl = process.env.AUTH_SERVICE_URL || "http://auth-service:8002";
   const dsai_searchUrl = process.env.SEARCH_SERVICE_URL || "http://search-service:8081";
   const dsai_watchlistUrl = process.env.WATCHLIST_SERVICE_URL || "http://watchlist-matcher:8083";
@@ -50,6 +53,16 @@ export async function GET() {
     dsai_search.status === "ok" &&
     dsai_watchlist.status === "ok";
 
+  const dsai_status = dsai_allHealthy ? 200 : 503;
+  const dsai_durationSec = (Date.now() - dsai_startTime) / 1000;
+  dsai_recordHttpRequest("GET", "/api/ready", dsai_status, dsai_durationSec);
+
+  dsai_logger.info("Readiness probe executed", {
+    route: "/api/ready",
+    status: dsai_status,
+    latency_ms: Date.now() - dsai_startTime,
+  });
+
   const dsai_responseBody = {
     status: dsai_allHealthy ? "ready" : "degraded",
     service: "trinetra-ui",
@@ -62,6 +75,6 @@ export async function GET() {
   };
 
   return NextResponse.json(dsai_responseBody, {
-    status: dsai_allHealthy ? 200 : 503,
+    status: dsai_status,
   });
 }

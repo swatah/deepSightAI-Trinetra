@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { DsaiHeader } from "@/components/DsaiHeader";
+import { DsaiProviders } from "@/components/DsaiProviders";
 
 const dsai_inter = Inter({ subsets: ["latin"] });
 
@@ -19,15 +20,17 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={dsai_inter.className}>
-        <div className="min-h-screen flex flex-col bg-background">
-          <DsaiHeader />
-          <main className="flex-1 container mx-auto px-4 py-6 max-w-7xl">
-            {children}
-          </main>
-          <footer className="border-t py-4 text-center text-sm text-muted-foreground">
-            deepSightAI Trinetra &copy; {new Date().getFullYear()}
-          </footer>
-        </div>
+        <DsaiProviders>
+          <div className="min-h-screen flex flex-col bg-background">
+            <DsaiHeader />
+            <main className="flex-1 container mx-auto px-4 py-6 max-w-7xl">
+              {children}
+            </main>
+            <footer className="border-t py-4 text-center text-sm text-muted-foreground">
+              deepSightAI Trinetra &copy; {new Date().getFullYear()}
+            </footer>
+          </div>
+        </DsaiProviders>
       </body>
     </html>
   );

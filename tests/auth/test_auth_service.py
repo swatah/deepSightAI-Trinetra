@@ -11,7 +11,15 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 
-from AuthService.auth_service import app, User, Base, get_db, create_access_token, pwd_context
+from deepSightAI.Trinetra.AuthService.auth_service import (
+    app,
+    User,
+    Tenant,
+    Base,
+    get_db,
+    create_access_token,
+    pwd_context,
+)
 
 # Use SQLite in-memory database for tests to avoid needing Postgres
 SQLITE_TEST_DB = "sqlite:////tmp/test_deepSightAI-Trinetra.db"
@@ -183,6 +191,53 @@ class TestAuthService:
         # Check last_login_at was updated
         db.refresh(user)
         assert user.last_login_at is not None
+
+    def test_dsai_get_tenant_profile(self, client, test_db):
+        """GET /tenants/{tenant_id} should return tenant profile and plugin_config."""
+        dsai_db = test_db()
+        dsai_tenant = Tenant(
+            name="Alpha Corp",
+            slug="alpha-corp",
+            description="Alpha test tenant",
+            active=True,
+            plugin_config={"sector": "commercial"},
+        )
+        dsai_db.add(dsai_tenant)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_tenant)
+
+        # Issue admin token
+        dsai_token = create_access_token({
+            "sub": "1",
+            "email": "admin@example.com",
+            "tenant_id": dsai_tenant.id,
+            "roles": ["admin"],
+        })
+
+        # Fetch by slug
+        dsai_resp_slug = client.get(
+            f"/tenants/{dsai_tenant.slug}",
+            headers={"Authorization": f"Bearer {dsai_token}"},
+        )
+        assert dsai_resp_slug.status_code == 200
+        dsai_data_slug = dsai_resp_slug.json()
+        assert dsai_data_slug["slug"] == "alpha-corp"
+        assert dsai_data_slug["plugin_config"]["sector"] == "commercial"
+
+        # Fetch by numeric ID
+        dsai_resp_id = client.get(
+            f"/tenants/{dsai_tenant.id}",
+            headers={"Authorization": f"Bearer {dsai_token}"},
+        )
+        assert dsai_resp_id.status_code == 200
+        assert dsai_resp_id.json()["name"] == "Alpha Corp"
+
+        # Not found
+        dsai_resp_404 = client.get(
+            "/tenants/non-existent-tenant",
+            headers={"Authorization": f"Bearer {dsai_token}"},
+        )
+        assert dsai_resp_404.status_code == 404
 
 
 # Helper function needed in test

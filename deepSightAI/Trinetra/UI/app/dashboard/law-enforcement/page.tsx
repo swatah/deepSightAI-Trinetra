@@ -17,6 +17,8 @@ import {
   dsai_createEvidenceManifest,
   dsai_computeSha256,
 } from "@/lib/chainOfCustody";
+import { useTenant } from "@/hooks/useTenant";
+import { SectorBadge } from "@/components/tenant/SectorBadge";
 
 // Sample verified law enforcement evidence records
 const DSAI_SAMPLE_EVIDENCE: EvidenceSegment[] = [
@@ -62,6 +64,7 @@ const DSAI_SAMPLE_EVIDENCE: EvidenceSegment[] = [
 
 export default function LawEnforcementDashboard() {
   const { data: dsai_session } = useSession();
+  const { dsai_sector } = useTenant();
   const [dsai_evidence] = useState<EvidenceSegment[]>(DSAI_SAMPLE_EVIDENCE);
   const [dsai_faceBlurEnabled, setDsaiFaceBlurEnabled] = useState(true);
   const [dsai_selectedEvidence, setDsaiSelectedEvidence] = useState<EvidenceSegment | null>(null);
@@ -70,15 +73,20 @@ export default function LawEnforcementDashboard() {
   const [dsai_reason, setDsaiReason] = useState("");
   const [dsai_exportSuccess, setDsaiExportSuccess] = useState(false);
 
-  const dsai_handleExportManifest = () => {
+  const dsai_handleExportManifest = async () => {
     if (!dsai_selectedEvidence || !dsai_officerId || !dsai_agency) return;
+
+    // Cryptographically compute verification hash for the evidence package
+    const dsai_calculatedHash = await dsai_computeSha256(
+      `${dsai_selectedEvidence.id}:${dsai_selectedEvidence.video_id}:${dsai_selectedEvidence.camera_id}:${dsai_selectedEvidence.sha256_hash}`
+    );
 
     const dsai_manifest = dsai_createEvidenceManifest(
       `EXPORT-${Date.now()}`,
       dsai_officerId,
       dsai_agency,
       dsai_reason || "Official CJIS Case File Request",
-      [dsai_selectedEvidence]
+      [{ ...dsai_selectedEvidence, sha256_hash: dsai_calculatedHash }]
     );
 
     const dsai_blob = new Blob([JSON.stringify(dsai_manifest, null, 2)], {
@@ -117,14 +125,29 @@ export default function LawEnforcementDashboard() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 px-4 py-2 rounded-xl">
-          <Fingerprint className="w-5 h-5 text-emerald-400" />
-          <div className="text-left">
-            <div className="text-xs text-slate-400">Auditing Officer</div>
-            <div className="text-sm font-semibold text-white">
-              {dsai_session?.user?.name || "Active Session"}
+        <div className="flex items-center gap-3">
+          {dsai_sector && <SectorBadge dsai_sector={dsai_sector} dsai_size="md" />}
+          <div className="flex items-center gap-3 bg-slate-900 border border-slate-800 px-4 py-2 rounded-xl">
+            <Fingerprint className="w-5 h-5 text-emerald-400" />
+            <div className="text-left">
+              <div className="text-xs text-slate-400">Auditing Officer</div>
+              <div className="text-sm font-semibold text-white">
+                {dsai_session?.user?.name || "Active Session"}
+              </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Simulator Disclosure Banner */}
+      <div className="p-4 rounded-xl bg-blue-950/40 border border-blue-800/50 text-blue-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="px-2 py-0.5 rounded font-mono font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px]">
+            DEMO / SIMULATION MODE
+          </span>
+          <span>
+            Demonstration chain-of-custody dataset. Package export executes real client SHA-256 integrity verification.
+          </span>
         </div>
       </div>
 

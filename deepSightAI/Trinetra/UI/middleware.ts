@@ -1,5 +1,6 @@
 import { getToken } from "next-auth/jwt";
 import { NextRequest, NextResponse } from "next/server";
+import { dsai_logger } from "@/lib/logger";
 
 /**
  * dsai_PROTECTED_PATHS — route prefixes that require an authenticated session.
@@ -10,9 +11,11 @@ const DSAI_PROTECTED_PATHS = [
   "/watchlist",
   "/alerts",
   "/upload",
+  "/ingest",
   "/rtsp",
   "/analytics",
   "/admin",
+  "/dashboard",
 ];
 
 /**
@@ -41,7 +44,7 @@ function dsai_isAdminPath(dsai_pathname: string): boolean {
 }
 
 /**
- * Next.js Edge Middleware for route protection.
+ * Next.js Edge Middleware for route protection and request logging.
  *
  * Behaviour:
  * 1. Public paths (/login, /api/auth/*, /api/health, /api/ready, /_next/*, static assets)
@@ -57,6 +60,13 @@ export async function middleware(dsai_request: NextRequest) {
   const dsai_requestId = dsai_request.headers.get("x-request-id") || crypto.randomUUID();
   const dsai_requestHeaders = new Headers(dsai_request.headers);
   dsai_requestHeaders.set("x-request-id", dsai_requestId);
+
+  // Structured logging for every intercepted request
+  dsai_logger.info("Incoming HTTP request", {
+    route: dsai_pathname,
+    method: dsai_request.method,
+    request_id: dsai_requestId,
+  });
 
   // Only intercept protected routes — all others pass through immediately.
   if (!dsai_isProtectedPath(dsai_pathname)) {
@@ -77,6 +87,10 @@ export async function middleware(dsai_request: NextRequest) {
 
   // Not authenticated — redirect to login with callbackUrl.
   if (!dsai_token) {
+    dsai_logger.warn("Unauthenticated request redirected to login", {
+      route: dsai_pathname,
+      request_id: dsai_requestId,
+    });
     const dsai_loginUrl = new URL("/login", dsai_request.url);
     dsai_loginUrl.searchParams.set("callbackUrl", dsai_pathname);
     return NextResponse.redirect(dsai_loginUrl);
@@ -88,8 +102,12 @@ export async function middleware(dsai_request: NextRequest) {
     const dsai_isAdmin = Array.isArray(dsai_roles) && dsai_roles.includes("admin");
 
     if (!dsai_isAdmin) {
-      // Return 403 response — the Next.js app/403/page.tsx will render if present,
-      // otherwise the default Next.js 403 error page is shown.
+      dsai_logger.warn("Forbidden admin access attempt", {
+        route: dsai_pathname,
+        request_id: dsai_requestId,
+        roles: dsai_roles,
+      });
+      // Return 403 response
       const dsai_forbiddenRes = new NextResponse(
         JSON.stringify({
           dsai_error: "Forbidden",
