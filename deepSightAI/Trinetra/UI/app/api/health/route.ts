@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 /**
  * GET /api/health
- * Lightweight liveness probe used by docker-compose healthcheck.
- * Returns HTTP 200 with a JSON body so the container enters "healthy" state.
+ * Liveness probe for Kubernetes & Docker: validates Node.js process is active.
  */
 export async function GET() {
   return NextResponse.json(
     {
-      dsai_status: "ok",
-      dsai_service: "trinetra-ui",
+      status: "ok",
+      service: "trinetra-ui",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
     },
     { status: 200 }
   );
