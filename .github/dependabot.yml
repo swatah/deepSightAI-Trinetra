@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Maintain dependencies for Next.js UI frontend
+  - package-ecosystem: "npm"
+    directory: "/deepSightAI/Trinetra/UI"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "area:ui"
+      - "dependencies"
+
+  # Maintain dependencies for UI production Dockerfile
+  - package-ecosystem: "docker"
+    directory: "/deepSightAI/Trinetra/UI"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "docker"
+      - "dependencies"
