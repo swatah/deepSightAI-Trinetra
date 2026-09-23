@@ -36,5 +36,6 @@ dist/
 deepSightAI/Trinetra/UI/node_modules/
 deepSightAI/Trinetra/UI/.next/
 deepSightAI/Trinetra/UI/out/
+*.tsbuildinfo
 
 
