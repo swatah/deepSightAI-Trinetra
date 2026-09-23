@@ -38,6 +38,8 @@ deepSightAI/Trinetra/UI/.next/
 deepSightAI/Trinetra/UI/out/
 deepSightAI/Trinetra/UI/coverage/
 coverage/
+playwright-report/
+test-results/
 *.tsbuildinfo
 
 
