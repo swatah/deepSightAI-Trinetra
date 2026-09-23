@@ -7,3 +7,5 @@ resources:
 - configmap.yaml
 - hpa.yaml
 - backend-services.yaml
+- network-policy.yaml
+- pdb.yaml

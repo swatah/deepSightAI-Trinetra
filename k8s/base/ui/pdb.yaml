@@ -1,0 +1,13 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: trinetra-ui-pdb
+  labels:
+    app.kubernetes.io/name: trinetra-ui
+    app.kubernetes.io/instance: deepSightAI-Trinetra
+    app.kubernetes.io/component: frontend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: trinetra-ui
