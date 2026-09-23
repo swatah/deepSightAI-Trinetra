@@ -61,7 +61,7 @@ jobs:
     - name: Install dependencies
       run: |
         pip install black flake8 isort mypy bandit
-        pip install -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt
+        pip install -r requirements.txt -r requirements_embedder.txt
 
     - name: Black (code formatting)
       run: |
@@ -75,7 +75,7 @@ jobs:
 
     - name: flake8 (linting)
       run: |
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,venv,build,dist
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.git,venv,build,dist,deepSightAI/Trinetra/UI/node_modules,deepSightAI/Trinetra/UI/.next,deepSightAI/Trinetra/UI
       continue-on-error: true
 
     - name: mypy (type checking)
@@ -138,11 +138,11 @@ jobs:
         pip install --upgrade pip
         pip install flake8 pytest pytest-cov
         pip install -e .
-        pip install -r requirements.txt -r requirements_embedder.txt -r requirements_ui.txt
+        pip install -r requirements.txt -r requirements_embedder.txt
 
     - name: Strict Flake8 Syntax & Critical Checks (Zero Tolerance)
       run: |
-        flake8 deepSightAI/Trinetra/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 deepSightAI/Trinetra/ --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=deepSightAI/Trinetra/UI/node_modules,deepSightAI/Trinetra/UI/.next,deepSightAI/Trinetra/UI
       continue-on-error: false
 
     - name: Run Phase 0 through Phase 4 Verification Suites

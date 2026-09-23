@@ -1,0 +1,54 @@
+name: UI CI / Next.js Test & Build Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'deepSightAI/Trinetra/UI/**'
+      - '.github/workflows/ui-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deepSightAI/Trinetra/UI/**'
+      - '.github/workflows/ui-ci.yml'
+
+jobs:
+  ui-ci:
+    name: Next.js UI Lint, Test & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+          cache-dependency-path: deepSightAI/Trinetra/UI/package-lock.json
+
+      - name: Install dependencies
+        working-directory: deepSightAI/Trinetra/UI
+        run: npm ci
+
+      - name: Lint (ESLint)
+        working-directory: deepSightAI/Trinetra/UI
+        run: npm run lint
+
+      - name: Typecheck (tsc)
+        working-directory: deepSightAI/Trinetra/UI
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        working-directory: deepSightAI/Trinetra/UI
+        run: npm run test:coverage
+
+      - name: Production build
+        working-directory: deepSightAI/Trinetra/UI
+        env:
+          NEXT_TELEMETRY_DISABLED: 1
+        run: npm run build
+
+      - name: Docker build check
+        run: docker build -t trinetra-ui:test -f deepSightAI/Trinetra/UI/Dockerfile .
