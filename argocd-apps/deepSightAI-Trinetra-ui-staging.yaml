@@ -1,0 +1,44 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: deepSightAI-Trinetra-ui-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: deepSightAI-Trinetra-ui-staging
+    app.kubernetes.io/part-of: deepSightAI-Trinetra
+    app.kubernetes.io/component: ui
+spec:
+  project: staging
+  source:
+    repoURL: https://github.com/swatah/deepSightAI-Trinetra.git
+    targetRevision: main
+    path: k8s/overlays/development
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: trinetra
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+    timeout: 10m
+  health:
+    healthRule:
+      get:
+        path: /api/ready
+        port: 3000
+        scheme: HTTP
+        timeout: 10
+    customHealthChecks:
+    - group: apps
+      kind: Deployment
+      name: trinetra-ui
+      unhealthy: {}
