@@ -54,9 +54,19 @@ function dsai_isAdminPath(dsai_pathname: string): boolean {
 export async function middleware(dsai_request: NextRequest) {
   const dsai_pathname = dsai_request.nextUrl.pathname;
 
+  const dsai_requestId = dsai_request.headers.get("x-request-id") || crypto.randomUUID();
+  const dsai_requestHeaders = new Headers(dsai_request.headers);
+  dsai_requestHeaders.set("x-request-id", dsai_requestId);
+
   // Only intercept protected routes — all others pass through immediately.
   if (!dsai_isProtectedPath(dsai_pathname)) {
-    return NextResponse.next();
+    const dsai_res = NextResponse.next({
+      request: {
+        headers: dsai_requestHeaders,
+      },
+    });
+    dsai_res.headers.set("x-request-id", dsai_requestId);
+    return dsai_res;
   }
 
   // Retrieve the NextAuth JWT from the request cookies.
@@ -80,7 +90,7 @@ export async function middleware(dsai_request: NextRequest) {
     if (!dsai_isAdmin) {
       // Return 403 response — the Next.js app/403/page.tsx will render if present,
       // otherwise the default Next.js 403 error page is shown.
-      return new NextResponse(
+      const dsai_forbiddenRes = new NextResponse(
         JSON.stringify({
           dsai_error: "Forbidden",
           dsai_message:
@@ -88,14 +98,24 @@ export async function middleware(dsai_request: NextRequest) {
         }),
         {
           status: 403,
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "x-request-id": dsai_requestId,
+          },
         }
       );
+      return dsai_forbiddenRes;
     }
   }
 
   // Authenticated and authorised — allow the request.
-  return NextResponse.next();
+  const dsai_authRes = NextResponse.next({
+    request: {
+      headers: dsai_requestHeaders,
+    },
+  });
+  dsai_authRes.headers.set("x-request-id", dsai_requestId);
+  return dsai_authRes;
 }
 
 /**
