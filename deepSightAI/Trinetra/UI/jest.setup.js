@@ -20,3 +20,11 @@ if (typeof globalThis.crypto === "undefined" || !globalThis.crypto.subtle) {
   const { webcrypto } = require("crypto");
   globalThis.crypto = webcrypto;
 }
+
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
