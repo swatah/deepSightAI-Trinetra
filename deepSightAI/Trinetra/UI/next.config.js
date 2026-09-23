@@ -1,9 +1,57 @@
 /** @type {import('next').NextConfig} */
+const dsai_withBundleAnalyzer = require("@next/bundle-analyzer")({
+  enabled: process.env.ANALYZE === "true",
+});
+
 const dsai_nextConfig = {
   output: "standalone",
   reactStrictMode: true,
   experimental: {
     typedRoutes: false,
+  },
+  images: {
+    formats: ["image/avif", "image/webp"],
+    remotePatterns: [
+      {
+        protocol: "http",
+        hostname: "localhost",
+        port: "9000",
+        pathname: "/**",
+      },
+      {
+        protocol: "http",
+        hostname: "minio",
+        port: "9000",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "*.swatah.ai",
+        pathname: "/**",
+      },
+    ],
+  },
+  async headers() {
+    return [
+      {
+        source: "/_next/static/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+      {
+        source: "/api/media/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=86400, stale-while-revalidate=43200",
+          },
+        ],
+      },
+    ];
   },
   // Reverse-proxy rewrites so browser calls are same-origin (avoids CORS on backend FastAPI services)
   async rewrites() {
@@ -33,4 +81,4 @@ const dsai_nextConfig = {
   },
 };
 
-module.exports = dsai_nextConfig;
+module.exports = dsai_withBundleAnalyzer(dsai_nextConfig);
