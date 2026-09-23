@@ -36,6 +36,8 @@ dist/
 deepSightAI/Trinetra/UI/node_modules/
 deepSightAI/Trinetra/UI/.next/
 deepSightAI/Trinetra/UI/out/
+deepSightAI/Trinetra/UI/coverage/
+coverage/
 *.tsbuildinfo
 
 
