@@ -197,6 +197,23 @@ export async function dsai_apiPut<T = unknown>(
 }
 
 /**
+ * dsai_apiPatch — convenience wrapper for PATCH requests with a JSON body.
+ */
+export async function dsai_apiPatch<T = unknown>(
+  dsai_path: string,
+  dsai_accessToken: string,
+  dsai_tenantId: string,
+  dsai_body: unknown,
+  dsai_options?: DsaiRequestOptions
+): Promise<T | undefined> {
+  return dsai_apiFetch<T>(dsai_path, dsai_accessToken, dsai_tenantId, {
+    ...dsai_options,
+    method: "PATCH",
+    body: JSON.stringify(dsai_body),
+  });
+}
+
+/**
  * dsai_apiDelete — convenience wrapper for DELETE requests.
  */
 export async function dsai_apiDelete<T = unknown>(

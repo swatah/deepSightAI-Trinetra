@@ -22,6 +22,9 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { useTenant } from "@/hooks/useTenant";
+import { SectorBadge } from "@/components/tenant/SectorBadge";
+import { SectorGate } from "@/components/tenant/SectorGate";
 
 // Sample foot traffic time series
 const DSAI_HOURLY_TRAFFIC = [
@@ -45,6 +48,15 @@ const DSAI_DEMOGRAPHICS = [
 ];
 
 export default function CommercialDashboard() {
+  return (
+    <SectorGate dsai_requiredSector="commercial" dsai_label="Commercial">
+      <CommercialDashboardContent />
+    </SectorGate>
+  );
+}
+
+function CommercialDashboardContent() {
+  const { dsai_sector } = useTenant();
   const [dsai_showHeatmap, setDsaiShowHeatmap] = useState(true);
   const [dsai_selectedCamera, setDsaiSelectedCamera] = useState("CAM-ENTRANCE-01");
   const [dsai_intensity, setDsaiIntensity] = useState(70);
@@ -114,6 +126,7 @@ export default function CommercialDashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {dsai_sector && <SectorBadge dsai_sector={dsai_sector} dsai_size="md" />}
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-semibold">
             <Sparkles className="w-3.5 h-3.5" />
             P2 Beta • ML In Training Mode

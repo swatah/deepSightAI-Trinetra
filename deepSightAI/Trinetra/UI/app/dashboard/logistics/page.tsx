@@ -13,6 +13,9 @@ import {
   ShieldCheck,
   Video,
 } from "lucide-react";
+import { useTenant } from "@/hooks/useTenant";
+import { SectorBadge } from "@/components/tenant/SectorBadge";
+import { SectorGate } from "@/components/tenant/SectorGate";
 
 interface DockDoor {
   bay_id: string;
@@ -68,6 +71,15 @@ const DSAI_INCIDENTS: ProximityViolation[] = [
 ];
 
 export default function LogisticsDashboard() {
+  return (
+    <SectorGate dsai_requiredSector="logistics" dsai_label="Logistics">
+      <LogisticsDashboardContent />
+    </SectorGate>
+  );
+}
+
+function LogisticsDashboardContent() {
+  const { dsai_sector } = useTenant();
   const [dsai_ppeCompliance, setDsaiPpeCompliance] = useState(94);
   const [dsai_dockDoors] = useState<DockDoor[]>(DSAI_DOCK_DOORS);
   const [dsai_incidents] = useState<ProximityViolation[]>(DSAI_INCIDENTS);
@@ -107,6 +119,7 @@ export default function LogisticsDashboard() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {dsai_sector && <SectorBadge dsai_sector={dsai_sector} dsai_size="md" />}
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-semibold">
             <Sparkles className="w-3.5 h-3.5" />
             P2 Beta • ML In Training Mode

@@ -1,6 +1,21 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { useSession } from "next-auth/react";
 import LogisticsDashboard from "../../app/dashboard/logistics/page";
+
+jest.mock("next-auth/react", () => ({
+  useSession: jest.fn(),
+}));
+
+// Admin bypasses the sector gate (SectorGate allows admins regardless of
+// tenant sector) so these tests can exercise dashboard content directly.
+const mockUseSession = useSession as jest.Mock;
+beforeEach(() => {
+  mockUseSession.mockReturnValue({
+    data: { user: { name: "Super Admin" }, dsai_roles: ["admin"] },
+    status: "authenticated",
+  });
+});
 
 describe("Logistics & Warehouse Dashboard Suite (#51)", () => {
   it("renders logistics dashboard header and P2 Beta badge", () => {

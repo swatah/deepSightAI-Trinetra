@@ -584,6 +584,43 @@ def create_api_key(
     )
 
 
+@app.get("/auth/api-keys")
+def dsai_list_api_keys(
+    dsai_payload: dict = Depends(get_current_user),
+    dsai_db: Session = Depends(get_db),
+):
+    """
+    List API keys for the authenticated user's tenant. Admin only.
+
+    Never returns the key hash or the full secret — only the label, prefix,
+    and timestamps, consistent with 'shown once at creation' semantics.
+    """
+    if "admin" not in dsai_payload.get("roles", []):
+        raise HTTPException(status_code=403, detail="Only platform administrators can list API keys")
+
+    dsai_tenant_id = dsai_payload.get("tenant_id")
+    if dsai_tenant_id is None:
+        raise HTTPException(status_code=400, detail="User must belong to a tenant to list API keys")
+
+    dsai_keys = (
+        dsai_db.query(APIKey)
+        .filter(APIKey.tenant_id == dsai_tenant_id)
+        .order_by(APIKey.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": dsai_k.id,
+            "name": dsai_k.name,
+            "prefix": dsai_k.prefix,
+            "created_at": dsai_k.created_at.isoformat() if dsai_k.created_at else None,
+            "expires_at": dsai_k.expires_at.isoformat() if dsai_k.expires_at else None,
+        }
+        for dsai_k in dsai_keys
+    ]
+
+
 @app.post("/auth/password-reset")
 def request_password_reset(
     data: PasswordResetRequest,
@@ -816,6 +853,229 @@ def dsai_get_tenant(
         "created_at": dsai_tenant.created_at.isoformat() if dsai_tenant.created_at else None,
         "plugin_config": dsai_tenant.plugin_config or {},
     }
+
+
+class DsaiTenantCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    slug: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = None
+    sector: Optional[str] = Field(default=None, description="Industry sector, stored in plugin_config")
+
+
+@app.post("/tenants", status_code=201)
+def dsai_create_tenant(
+    dsai_data: DsaiTenantCreate,
+    dsai_payload: dict = Depends(require_auth),
+    dsai_db: Session = Depends(get_db),
+):
+    """
+    Provision a new platform tenant.
+
+    Requires the caller to hold the 'admin' role. Sector is stored inside
+    plugin_config (Phase 0 decision 5 — the Tenant table has no dedicated column).
+    """
+    if "admin" not in dsai_payload.get("roles", []):
+        raise HTTPException(status_code=403, detail="Only platform administrators can provision tenants")
+
+    if dsai_db.query(Tenant).filter(Tenant.slug == dsai_data.slug).first():
+        raise HTTPException(status_code=400, detail="Tenant slug already in use")
+
+    dsai_tenant = Tenant(
+        name=dsai_data.name,
+        slug=dsai_data.slug,
+        description=dsai_data.description,
+        active=True,
+        plugin_config={"sector": dsai_data.sector} if dsai_data.sector else {},
+    )
+    dsai_db.add(dsai_tenant)
+    dsai_db.commit()
+    dsai_db.refresh(dsai_tenant)
+
+    return {
+        "id": str(dsai_tenant.id),
+        "name": dsai_tenant.name,
+        "slug": dsai_tenant.slug,
+        "description": dsai_tenant.description,
+        "active": dsai_tenant.active,
+        "created_at": dsai_tenant.created_at.isoformat() if dsai_tenant.created_at else None,
+        "plugin_config": dsai_tenant.plugin_config or {},
+    }
+
+
+@app.get("/tenants")
+def dsai_list_tenants(
+    dsai_payload: dict = Depends(require_auth),
+    dsai_db: Session = Depends(get_db),
+):
+    """List all platform tenants. Requires the caller to hold the 'admin' role."""
+    if "admin" not in dsai_payload.get("roles", []):
+        raise HTTPException(status_code=403, detail="Only platform administrators can list tenants")
+
+    dsai_tenants = dsai_db.query(Tenant).order_by(Tenant.created_at.desc()).all()
+    return [
+        {
+            "id": str(dsai_t.id),
+            "name": dsai_t.name,
+            "slug": dsai_t.slug,
+            "active": dsai_t.active,
+            "created_at": dsai_t.created_at.isoformat() if dsai_t.created_at else None,
+            "plugin_config": dsai_t.plugin_config or {},
+        }
+        for dsai_t in dsai_tenants
+    ]
+
+
+class DsaiTenantStatusUpdate(BaseModel):
+    active: bool
+
+
+@app.patch("/tenants/{tenant_id}")
+def dsai_update_tenant_status(
+    tenant_id: int,
+    dsai_data: DsaiTenantStatusUpdate,
+    dsai_payload: dict = Depends(require_auth),
+    dsai_db: Session = Depends(get_db),
+):
+    """Suspend or reactivate a tenant. Requires the caller to hold the 'admin' role."""
+    if "admin" not in dsai_payload.get("roles", []):
+        raise HTTPException(status_code=403, detail="Only platform administrators can update tenant status")
+
+    dsai_tenant = dsai_db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not dsai_tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    dsai_tenant.active = dsai_data.active
+    dsai_db.commit()
+    dsai_db.refresh(dsai_tenant)
+
+    return {
+        "id": str(dsai_tenant.id),
+        "name": dsai_tenant.name,
+        "slug": dsai_tenant.slug,
+        "description": dsai_tenant.description,
+        "active": dsai_tenant.active,
+        "created_at": dsai_tenant.created_at.isoformat() if dsai_tenant.created_at else None,
+        "plugin_config": dsai_tenant.plugin_config or {},
+    }
+
+
+class DsaiTenantUserCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    full_name: Optional[str] = None
+    role: str = Field(default="operator")
+
+
+@app.post("/tenants/{tenant_id}/users", status_code=201)
+def dsai_create_tenant_user(
+    tenant_id: int,
+    dsai_data: DsaiTenantUserCreate,
+    dsai_payload: dict = Depends(require_auth),
+    dsai_db: Session = Depends(get_db),
+):
+    """
+    Provision a user under a tenant with a given role. Admin only.
+
+    If a user with the given email already exists, they are attached to the
+    tenant (and assigned the role) rather than duplicated.
+    """
+    if "admin" not in dsai_payload.get("roles", []):
+        raise HTTPException(status_code=403, detail="Only platform administrators can provision users")
+
+    dsai_tenant = dsai_db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not dsai_tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    dsai_user = dsai_db.query(User).filter(User.email == dsai_data.email).first()
+    if not dsai_user:
+        dsai_user = User(
+            email=dsai_data.email,
+            full_name=dsai_data.full_name or dsai_data.email,
+            password_hash=get_password_hash(dsai_data.password),
+            email_verified=False,
+        )
+        dsai_db.add(dsai_user)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_user)
+
+    dsai_user_tenant = (
+        dsai_db.query(UserTenant)
+        .filter(UserTenant.user_id == dsai_user.id, UserTenant.tenant_id == tenant_id)
+        .first()
+    )
+    if not dsai_user_tenant:
+        dsai_user_tenant = UserTenant(user_id=dsai_user.id, tenant_id=tenant_id, status="active")
+        dsai_db.add(dsai_user_tenant)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_user_tenant)
+
+    dsai_role = (
+        dsai_db.query(Role)
+        .filter(Role.tenant_id == tenant_id, Role.name == dsai_data.role)
+        .first()
+    )
+    if not dsai_role:
+        dsai_role = Role(tenant_id=tenant_id, name=dsai_data.role, system_default=True)
+        dsai_db.add(dsai_role)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_role)
+
+    dsai_existing_assignment = (
+        dsai_db.query(UserRole)
+        .filter(UserRole.user_tenant_id == dsai_user_tenant.id, UserRole.role_id == dsai_role.id)
+        .first()
+    )
+    if not dsai_existing_assignment:
+        dsai_db.add(UserRole(user_tenant_id=dsai_user_tenant.id, role_id=dsai_role.id))
+        dsai_db.commit()
+
+    return {
+        "id": str(dsai_user.id),
+        "email": dsai_user.email,
+        "tenant_id": str(tenant_id),
+        "roles": [dsai_data.role],
+        "created_at": dsai_user.created_at.isoformat() if dsai_user.created_at else None,
+    }
+
+
+@app.get("/tenants/{tenant_id}/users")
+def dsai_list_tenant_users(
+    tenant_id: int,
+    dsai_payload: dict = Depends(require_auth),
+    dsai_db: Session = Depends(get_db),
+):
+    """List active users of a tenant, with their assigned roles. Admin only."""
+    if "admin" not in dsai_payload.get("roles", []):
+        raise HTTPException(status_code=403, detail="Only platform administrators can list tenant users")
+
+    dsai_tenant = dsai_db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not dsai_tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    dsai_memberships = (
+        dsai_db.query(UserTenant)
+        .filter(UserTenant.tenant_id == tenant_id, UserTenant.status == "active")
+        .order_by(UserTenant.joined_at.desc())
+        .all()
+    )
+
+    dsai_results = []
+    for dsai_membership in dsai_memberships:
+        dsai_role_rows = (
+            dsai_db.query(Role.name)
+            .join(UserRole, UserRole.role_id == Role.id)
+            .filter(UserRole.user_tenant_id == dsai_membership.id)
+            .all()
+        )
+        dsai_results.append({
+            "id": str(dsai_membership.user.id),
+            "email": dsai_membership.user.email,
+            "tenant_id": str(tenant_id),
+            "roles": [dsai_r[0] for dsai_r in dsai_role_rows],
+            "created_at": dsai_membership.joined_at.isoformat() if dsai_membership.joined_at else None,
+        })
+
+    return dsai_results
 
 
 @app.delete("/tenants/{tenant_id}")

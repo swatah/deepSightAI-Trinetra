@@ -19,6 +19,7 @@ import {
 } from "@/lib/chainOfCustody";
 import { useTenant } from "@/hooks/useTenant";
 import { SectorBadge } from "@/components/tenant/SectorBadge";
+import { SectorGate } from "@/components/tenant/SectorGate";
 
 // Sample verified law enforcement evidence records
 const DSAI_SAMPLE_EVIDENCE: EvidenceSegment[] = [
@@ -63,6 +64,14 @@ const DSAI_SAMPLE_EVIDENCE: EvidenceSegment[] = [
 ];
 
 export default function LawEnforcementDashboard() {
+  return (
+    <SectorGate dsai_requiredSector="law_enforcement" dsai_label="Law Enforcement">
+      <LawEnforcementDashboardContent />
+    </SectorGate>
+  );
+}
+
+function LawEnforcementDashboardContent() {
   const { data: dsai_session } = useSession();
   const { dsai_sector } = useTenant();
   const [dsai_evidence] = useState<EvidenceSegment[]>(DSAI_SAMPLE_EVIDENCE);

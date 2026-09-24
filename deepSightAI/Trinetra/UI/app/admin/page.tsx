@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import {
   Shield,
@@ -14,10 +14,12 @@ import {
   ShieldAlert,
   ToggleLeft,
   ToggleRight,
+  Loader2,
 } from "lucide-react";
 import { dsai_isAdmin } from "@/lib/auth/dsai_rbac";
 import { SectorBadge } from "@/components/tenant/SectorBadge";
 import { QuotaUsageDisplay } from "@/components/tenant/QuotaUsageDisplay";
+import { dsai_apiGet, dsai_apiPost, dsai_apiPatch, DsaiApiError } from "@/lib/api/dsai_client";
 
 interface TenantRecord {
   id: string;
@@ -44,96 +46,187 @@ interface ApiKeyRecord {
   expires_at: string;
 }
 
-const DSAI_INITIAL_TENANTS: TenantRecord[] = [
-  {
-    id: "1",
-    name: "Metropolitan Transit Authority",
-    slug: "mta-transit",
-    sector: "law_enforcement",
-    active: true,
-    created_at: "2026-04-10",
-  },
-  {
-    id: "2",
-    name: "Apex Logistics & Freight",
-    slug: "apex-logistics",
-    sector: "logistics",
-    active: true,
-    created_at: "2026-05-18",
-  },
-  {
-    id: "3",
-    name: "OmniCorp Retail Centers",
-    slug: "omnicorp-retail",
-    sector: "commercial",
-    active: true,
-    created_at: "2026-06-22",
-  },
-];
+/** Raw shape returned by GET/POST /tenants on AuthService */
+interface DsaiTenantApiRecord {
+  id: string;
+  name: string;
+  slug: string;
+  active: boolean;
+  created_at: string | null;
+  plugin_config?: Record<string, unknown> | null;
+}
 
-const DSAI_INITIAL_USERS: UserRecord[] = [
-  {
-    id: "usr-1",
-    email: "security.director@mta.gov",
-    tenant_id: "mta-transit",
-    roles: ["admin", "operator"],
-    created_at: "2026-04-11",
-  },
-  {
-    id: "usr-2",
-    email: "patrol.officer@mta.gov",
-    tenant_id: "mta-transit",
-    roles: ["operator"],
-    created_at: "2026-04-15",
-  },
-  {
-    id: "usr-3",
-    email: "auditor@swatah.ai",
-    tenant_id: "omnicorp-retail",
-    roles: ["viewer"],
-    created_at: "2026-07-01",
-  },
-];
-
-const DSAI_INITIAL_API_KEYS: ApiKeyRecord[] = [
-  {
-    id: 101,
-    name: "Edge Camera Stream Ingest Key",
-    prefix: "cp_9xK2mP1a",
-    created_at: "2026-08-01",
-    expires_at: "2027-08-01",
-  },
-];
+function dsai_mapTenantRecord(dsai_raw: DsaiTenantApiRecord): TenantRecord {
+  const dsai_pluginConfig = dsai_raw.plugin_config ?? {};
+  const dsai_sector =
+    typeof dsai_pluginConfig["sector"] === "string" ? (dsai_pluginConfig["sector"] as string) : "general";
+  return {
+    id: dsai_raw.id,
+    name: dsai_raw.name,
+    slug: dsai_raw.slug,
+    sector: dsai_sector,
+    active: dsai_raw.active,
+    created_at: dsai_raw.created_at ?? "",
+  };
+}
 
 export default function AdminPage() {
   const { data: dsai_session, status: dsai_authStatus } = useSession();
+  const dsai_accessToken = (dsai_session as any)?.dsai_accessToken as string | undefined;
+  const dsai_tenantId = (dsai_session as any)?.dsai_tenantId as string | undefined;
   const [dsai_activeTab, setDsaiActiveTab] = useState<"tenants" | "users" | "apikeys">("tenants");
 
   // Tenants state
-  const [dsai_tenants, setDsaiTenants] = useState<TenantRecord[]>(DSAI_INITIAL_TENANTS);
+  const [dsai_tenants, setDsaiTenants] = useState<TenantRecord[]>([]);
+  const [dsai_tenantsLoading, setDsaiTenantsLoading] = useState(false);
+  const [dsai_tenantsError, setDsaiTenantsError] = useState<string | null>(null);
   const [dsai_showCreateTenant, setDsaiShowCreateTenant] = useState(false);
   const [dsai_newTenantName, setDsaiNewTenantName] = useState("");
   const [dsai_newTenantSlug, setDsaiNewTenantSlug] = useState("");
   const [dsai_newTenantSector, setDsaiNewTenantSector] = useState("law_enforcement");
+  const [dsai_createTenantError, setDsaiCreateTenantError] = useState<string | null>(null);
+  const [dsai_createTenantBusy, setDsaiCreateTenantBusy] = useState(false);
+  const [dsai_togglingTenantId, setDsaiTogglingTenantId] = useState<string | null>(null);
+  const [dsai_toggleTenantError, setDsaiToggleTenantError] = useState<string | null>(null);
 
-  // Users state
-  const [dsai_users, setDsaiUsers] = useState<UserRecord[]>(DSAI_INITIAL_USERS);
+  // Users state — aggregated by fetching GET /tenants/{id}/users for every
+  // known tenant, since there is no single cross-tenant user-listing endpoint.
+  const [dsai_users, setDsaiUsers] = useState<UserRecord[]>([]);
+  const [dsai_usersLoading, setDsaiUsersLoading] = useState(false);
+  const [dsai_usersError, setDsaiUsersError] = useState<string | null>(null);
   const [dsai_showCreateUser, setDsaiShowCreateUser] = useState(false);
   const [dsai_newUserEmail, setDsaiNewUserEmail] = useState("");
   const [dsai_newUserPassword, setDsaiNewUserPassword] = useState("");
-  const [dsai_newUserTenant, setDsaiNewUserTenant] = useState("mta-transit");
+  const [dsai_newUserTenant, setDsaiNewUserTenant] = useState("");
   const [dsai_newUserRole, setDsaiNewUserRole] = useState("operator");
+  const [dsai_createUserError, setDsaiCreateUserError] = useState<string | null>(null);
+  const [dsai_createUserBusy, setDsaiCreateUserBusy] = useState(false);
 
-  // API Keys state
-  const [dsai_apiKeys, setDsaiApiKeys] = useState<ApiKeyRecord[]>(DSAI_INITIAL_API_KEYS);
+  // API Keys state — GET /auth/api-keys lists keys for the admin's own tenant
+  // (prefix/name/timestamps only, never the hash); POST creates a new one.
+  const [dsai_apiKeys, setDsaiApiKeys] = useState<ApiKeyRecord[]>([]);
+  const [dsai_apiKeysLoading, setDsaiApiKeysLoading] = useState(false);
+  const [dsai_apiKeysError, setDsaiApiKeysError] = useState<string | null>(null);
   const [dsai_showCreateApiKey, setDsaiShowCreateApiKey] = useState(false);
   const [dsai_newKeyName, setDsaiNewKeyName] = useState("");
   const [dsai_newKeyDays, setDsaiNewKeyDays] = useState(90);
   const [dsai_generatedSecret, setDsaiGeneratedSecret] = useState<string | null>(null);
   const [dsai_copiedSecret, setDsaiCopiedSecret] = useState(false);
+  const [dsai_createKeyError, setDsaiCreateKeyError] = useState<string | null>(null);
+  const [dsai_createKeyBusy, setDsaiCreateKeyBusy] = useState(false);
 
   // Verify Admin privilege
   const dsai_adminAccess = dsai_isAdmin(dsai_session);
+
+  useEffect(() => {
+    if (!dsai_adminAccess || !dsai_accessToken) return;
+    let dsai_cancelled = false;
+    setDsaiTenantsLoading(true);
+    setDsaiTenantsError(null);
+
+    dsai_apiGet<DsaiTenantApiRecord[]>("auth/tenants", dsai_accessToken, dsai_tenantId ?? "")
+      .then((dsai_raw) => {
+        if (dsai_cancelled || !dsai_raw) return;
+        setDsaiTenants(dsai_raw.map(dsai_mapTenantRecord));
+      })
+      .catch((dsai_err: unknown) => {
+        if (dsai_cancelled) return;
+        setDsaiTenantsError(
+          dsai_err instanceof DsaiApiError ? dsai_err.message : "Failed to load tenants"
+        );
+      })
+      .finally(() => {
+        if (!dsai_cancelled) setDsaiTenantsLoading(false);
+      });
+
+    return () => {
+      dsai_cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dsai_adminAccess, dsai_accessToken]);
+
+  const dsai_tenantIdsKey = dsai_tenants.map((t) => t.id).join(",");
+
+  useEffect(() => {
+    if (!dsai_adminAccess || !dsai_accessToken || dsai_tenants.length === 0) return;
+    let dsai_cancelled = false;
+    setDsaiUsersLoading(true);
+    setDsaiUsersError(null);
+
+    Promise.all(
+      dsai_tenants.map((dsai_tenant) =>
+        dsai_apiGet<
+          { id: string; email: string; tenant_id: string; roles: string[]; created_at: string | null }[]
+        >(`auth/tenants/${dsai_tenant.id}/users`, dsai_accessToken, dsai_tenantId ?? "").catch(() => [])
+      )
+    )
+      .then((dsai_perTenant) => {
+        if (dsai_cancelled) return;
+        const dsai_flat = dsai_perTenant
+          .flat()
+          .filter((dsai_u): dsai_u is NonNullable<typeof dsai_u> => Boolean(dsai_u));
+        setDsaiUsers(
+          dsai_flat.map((dsai_u) => ({
+            id: dsai_u.id,
+            email: dsai_u.email,
+            tenant_id: dsai_u.tenant_id,
+            roles: dsai_u.roles,
+            created_at: dsai_u.created_at ?? "",
+          }))
+        );
+      })
+      .catch((dsai_err: unknown) => {
+        if (dsai_cancelled) return;
+        setDsaiUsersError(
+          dsai_err instanceof DsaiApiError ? dsai_err.message : "Failed to load tenant users"
+        );
+      })
+      .finally(() => {
+        if (!dsai_cancelled) setDsaiUsersLoading(false);
+      });
+
+    return () => {
+      dsai_cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dsai_adminAccess, dsai_accessToken, dsai_tenantIdsKey]);
+
+  useEffect(() => {
+    if (!dsai_adminAccess || !dsai_accessToken) return;
+    let dsai_cancelled = false;
+    setDsaiApiKeysLoading(true);
+    setDsaiApiKeysError(null);
+
+    dsai_apiGet<
+      { id: number; name: string; prefix: string; created_at: string | null; expires_at: string | null }[]
+    >("auth/auth/api-keys", dsai_accessToken, dsai_tenantId ?? "")
+      .then((dsai_raw) => {
+        if (dsai_cancelled || !dsai_raw) return;
+        setDsaiApiKeys(
+          dsai_raw.map((dsai_k) => ({
+            id: dsai_k.id,
+            name: dsai_k.name,
+            prefix: dsai_k.prefix,
+            created_at: dsai_k.created_at ?? "",
+            expires_at: dsai_k.expires_at ?? "",
+          }))
+        );
+      })
+      .catch((dsai_err: unknown) => {
+        if (dsai_cancelled) return;
+        setDsaiApiKeysError(
+          dsai_err instanceof DsaiApiError ? dsai_err.message : "Failed to load API keys"
+        );
+      })
+      .finally(() => {
+        if (!dsai_cancelled) setDsaiApiKeysLoading(false);
+      });
+
+    return () => {
+      dsai_cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dsai_adminAccess, dsai_accessToken]);
 
   if (dsai_authStatus === "loading") {
     return (
@@ -161,68 +254,143 @@ export default function AdminPage() {
   }
 
   // Tenant Handlers
-  const dsai_handleCreateTenant = () => {
-    if (!dsai_newTenantName || !dsai_newTenantSlug) return;
-    const dsai_newTenant: TenantRecord = {
-      id: String(dsai_tenants.length + 1),
-      name: dsai_newTenantName,
-      slug: dsai_newTenantSlug.toLowerCase().replace(/\s+/g, "-"),
-      sector: dsai_newTenantSector,
-      active: true,
-      created_at: new Date().toISOString().split("T")[0],
-    };
-    setDsaiTenants([...dsai_tenants, dsai_newTenant]);
-    setDsaiNewTenantName("");
-    setDsaiNewTenantSlug("");
-    setDsaiShowCreateTenant(false);
+  const dsai_handleCreateTenant = async () => {
+    if (!dsai_newTenantName || !dsai_newTenantSlug || !dsai_accessToken) return;
+    setDsaiCreateTenantBusy(true);
+    setDsaiCreateTenantError(null);
+    try {
+      const dsai_created = await dsai_apiPost<DsaiTenantApiRecord>(
+        "auth/tenants",
+        dsai_accessToken,
+        dsai_tenantId ?? "",
+        {
+          name: dsai_newTenantName,
+          slug: dsai_newTenantSlug.toLowerCase().replace(/\s+/g, "-"),
+          sector: dsai_newTenantSector,
+        }
+      );
+      if (dsai_created) {
+        setDsaiTenants((dsai_prev) => [...dsai_prev, dsai_mapTenantRecord(dsai_created)]);
+        setDsaiNewTenantName("");
+        setDsaiNewTenantSlug("");
+        setDsaiShowCreateTenant(false);
+      }
+    } catch (dsai_err) {
+      setDsaiCreateTenantError(
+        dsai_err instanceof DsaiApiError ? dsai_err.message : "Failed to provision tenant"
+      );
+    } finally {
+      setDsaiCreateTenantBusy(false);
+    }
   };
 
-  const dsai_toggleTenantActive = (id: string) => {
-    setDsaiTenants(
-      dsai_tenants.map((t) => (t.id === id ? { ...t, active: !t.active } : t))
-    );
+  const dsai_toggleTenantActive = async (dsai_tenant: TenantRecord) => {
+    if (!dsai_accessToken) return;
+    setDsaiTogglingTenantId(dsai_tenant.id);
+    setDsaiToggleTenantError(null);
+    try {
+      const dsai_updated = await dsai_apiPatch<DsaiTenantApiRecord>(
+        `auth/tenants/${dsai_tenant.id}`,
+        dsai_accessToken,
+        dsai_tenantId ?? "",
+        { active: !dsai_tenant.active }
+      );
+      if (dsai_updated) {
+        const dsai_mapped = dsai_mapTenantRecord(dsai_updated);
+        setDsaiTenants((dsai_prev) =>
+          dsai_prev.map((t) => (t.id === dsai_tenant.id ? dsai_mapped : t))
+        );
+      }
+    } catch (dsai_err) {
+      setDsaiToggleTenantError(
+        dsai_err instanceof DsaiApiError ? dsai_err.message : "Failed to update tenant status"
+      );
+    } finally {
+      setDsaiTogglingTenantId(null);
+    }
   };
 
   // User Handlers
-  const dsai_handleCreateUser = () => {
-    if (!dsai_newUserEmail || !dsai_newUserPassword) return;
-    const dsai_newUser: UserRecord = {
-      id: `usr-${Date.now()}`,
-      email: dsai_newUserEmail,
-      tenant_id: dsai_newUserTenant,
-      roles: [dsai_newUserRole],
-      created_at: new Date().toISOString().split("T")[0],
-    };
-    setDsaiUsers([...dsai_users, dsai_newUser]);
-    setDsaiNewUserEmail("");
-    setDsaiNewUserPassword("");
-    setDsaiShowCreateUser(false);
+  const dsai_handleCreateUser = async () => {
+    if (!dsai_newUserEmail || !dsai_newUserPassword || !dsai_newUserTenant || !dsai_accessToken) return;
+    setDsaiCreateUserBusy(true);
+    setDsaiCreateUserError(null);
+    try {
+      const dsai_created = await dsai_apiPost<{
+        id: string;
+        email: string;
+        tenant_id: string;
+        roles: string[];
+        created_at: string | null;
+      }>(`auth/tenants/${dsai_newUserTenant}/users`, dsai_accessToken, dsai_tenantId ?? "", {
+        email: dsai_newUserEmail,
+        password: dsai_newUserPassword,
+        role: dsai_newUserRole,
+      });
+      if (dsai_created) {
+        setDsaiUsers((dsai_prev) => [
+          ...dsai_prev,
+          {
+            id: dsai_created.id,
+            email: dsai_created.email,
+            tenant_id: dsai_created.tenant_id,
+            roles: dsai_created.roles,
+            created_at: dsai_created.created_at ?? new Date().toISOString().split("T")[0],
+          },
+        ]);
+        setDsaiNewUserEmail("");
+        setDsaiNewUserPassword("");
+        setDsaiShowCreateUser(false);
+      }
+    } catch (dsai_err) {
+      setDsaiCreateUserError(
+        dsai_err instanceof DsaiApiError ? dsai_err.message : "Failed to provision user"
+      );
+    } finally {
+      setDsaiCreateUserBusy(false);
+    }
   };
 
-  // API Key Handlers
-  const dsai_handleCreateApiKey = () => {
-    if (!dsai_newKeyName) return;
-    const dsai_prefix = "cp_" + Math.random().toString(36).substring(2, 10);
-    const dsai_suffix = Array.from({ length: 32 }, () =>
-      Math.floor(Math.random() * 16).toString(16)
-    ).join("");
-    const dsai_fullKey = dsai_prefix + dsai_suffix;
+  // API Key Handlers — calls the real POST /auth/api-keys endpoint, scoped to
+  // the admin's own tenant, with an Argon2id hash stored server-side.
+  const dsai_handleCreateApiKey = async () => {
+    if (!dsai_newKeyName || !dsai_accessToken) return;
+    setDsaiCreateKeyBusy(true);
+    setDsaiCreateKeyError(null);
+    try {
+      const dsai_created = await dsai_apiPost<{
+        id: number;
+        prefix: string;
+        key: string;
+        name: string;
+        permissions: string[];
+        expires_at: string;
+      }>("auth/auth/api-keys", dsai_accessToken, dsai_tenantId ?? "", {
+        name: dsai_newKeyName,
+        permissions: [],
+        expires_in_days: dsai_newKeyDays,
+      });
 
-    const dsai_expires = new Date();
-    dsai_expires.setDate(dsai_expires.getDate() + dsai_newKeyDays);
-
-    const dsai_newRecord: ApiKeyRecord = {
-      id: Date.now(),
-      name: dsai_newKeyName,
-      prefix: dsai_prefix,
-      created_at: new Date().toISOString().split("T")[0],
-      expires_at: dsai_expires.toISOString().split("T")[0],
-    };
-
-    setDsaiApiKeys([...dsai_apiKeys, dsai_newRecord]);
-    setDsaiGeneratedSecret(dsai_fullKey);
-    setDsaiNewKeyName("");
-    setDsaiShowCreateApiKey(false);
+      if (dsai_created) {
+        const dsai_newRecord: ApiKeyRecord = {
+          id: dsai_created.id,
+          name: dsai_created.name,
+          prefix: dsai_created.prefix,
+          created_at: new Date().toISOString().split("T")[0],
+          expires_at: dsai_created.expires_at.split("T")[0],
+        };
+        setDsaiApiKeys((dsai_prev) => [...dsai_prev, dsai_newRecord]);
+        setDsaiGeneratedSecret(dsai_created.key);
+        setDsaiNewKeyName("");
+        setDsaiShowCreateApiKey(false);
+      }
+    } catch (dsai_err) {
+      setDsaiCreateKeyError(
+        dsai_err instanceof DsaiApiError ? dsai_err.message : "Failed to generate API key"
+      );
+    } finally {
+      setDsaiCreateKeyBusy(false);
+    }
   };
 
   const dsai_handleCopySecret = () => {
@@ -296,6 +464,16 @@ export default function AdminPage() {
             </button>
           </div>
 
+          {dsai_tenantsError && dsai_tenants.length > 0 && (
+            <p className="text-xs text-amber-400">
+              Could not refresh the full tenant list from AuthService ({dsai_tenantsError}) — showing
+              tenants provisioned in this session only.
+            </p>
+          )}
+          {dsai_toggleTenantError && (
+            <p className="text-xs text-red-400">{dsai_toggleTenantError}</p>
+          )}
+
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
             <table className="w-full text-left text-sm text-slate-300">
               <thead className="bg-slate-950/70 text-xs uppercase font-semibold text-slate-400 border-b border-slate-800">
@@ -309,43 +487,67 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-sans text-xs">
-                {dsai_tenants.map((dsai_tenant) => (
-                  <tr key={dsai_tenant.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="px-6 py-4 font-semibold text-white">{dsai_tenant.name}</td>
-                    <td className="px-6 py-4 font-mono text-slate-400">{dsai_tenant.slug}</td>
-                    <td className="px-6 py-4">
-                      <SectorBadge dsai_sector={dsai_tenant.sector} dsai_size="sm" />
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`inline-flex px-2 py-0.5 rounded-full font-medium text-[11px] ${
-                          dsai_tenant.active
-                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                            : "bg-red-500/10 text-red-400 border border-red-500/20"
-                        }`}
-                      >
-                        {dsai_tenant.active ? "Active" : "Suspended"}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-slate-500">{dsai_tenant.created_at}</td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => dsai_toggleTenantActive(dsai_tenant.id)}
-                        className="text-xs text-slate-400 hover:text-white inline-flex items-center gap-1 font-medium"
-                      >
-                        {dsai_tenant.active ? (
-                          <>
-                            <ToggleRight className="w-4 h-4 text-emerald-400" /> Suspend
-                          </>
-                        ) : (
-                          <>
-                            <ToggleLeft className="w-4 h-4 text-slate-500" /> Activate
-                          </>
-                        )}
-                      </button>
+                {dsai_tenantsLoading ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-slate-400">
+                      <Loader2 className="w-4 h-4 inline animate-spin mr-2" />
+                      Loading tenants from AuthService...
                     </td>
                   </tr>
-                ))}
+                ) : dsai_tenantsError && dsai_tenants.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-red-400">
+                      {dsai_tenantsError}
+                    </td>
+                  </tr>
+                ) : dsai_tenants.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
+                      No tenants provisioned yet.
+                    </td>
+                  </tr>
+                ) : (
+                  dsai_tenants.map((dsai_tenant) => (
+                    <tr key={dsai_tenant.id} className="hover:bg-slate-800/40 transition-colors">
+                      <td className="px-6 py-4 font-semibold text-white">{dsai_tenant.name}</td>
+                      <td className="px-6 py-4 font-mono text-slate-400">{dsai_tenant.slug}</td>
+                      <td className="px-6 py-4">
+                        <SectorBadge dsai_sector={dsai_tenant.sector} dsai_size="sm" />
+                      </td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`inline-flex px-2 py-0.5 rounded-full font-medium text-[11px] ${
+                            dsai_tenant.active
+                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                              : "bg-red-500/10 text-red-400 border border-red-500/20"
+                          }`}
+                        >
+                          {dsai_tenant.active ? "Active" : "Suspended"}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-slate-500">{dsai_tenant.created_at}</td>
+                      <td className="px-6 py-4 text-right">
+                        <button
+                          onClick={() => dsai_toggleTenantActive(dsai_tenant)}
+                          disabled={dsai_togglingTenantId === dsai_tenant.id}
+                          className="text-xs text-slate-400 hover:text-white inline-flex items-center gap-1 font-medium disabled:opacity-50"
+                        >
+                          {dsai_togglingTenantId === dsai_tenant.id ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : dsai_tenant.active ? (
+                            <>
+                              <ToggleRight className="w-4 h-4 text-emerald-400" /> Suspend
+                            </>
+                          ) : (
+                            <>
+                              <ToggleLeft className="w-4 h-4 text-slate-500" /> Activate
+                            </>
+                          )}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -362,7 +564,13 @@ export default function AdminPage() {
       {dsai_activeTab === "users" && (
         <div className="space-y-6">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-bold text-white">Platform Users & Roles</h2>
+            <div>
+              <h2 className="text-lg font-bold text-white">Platform Users & Roles</h2>
+              <p className="text-xs text-slate-400">
+                Aggregated by listing members of every known tenant — there is no single
+                cross-tenant user endpoint on AuthService.
+              </p>
+            </div>
             <button
               onClick={() => setDsaiShowCreateUser(true)}
               className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-blue-600/20 transition-colors"
@@ -383,25 +591,46 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-sans text-xs">
-                {dsai_users.map((dsai_user) => (
-                  <tr key={dsai_user.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="px-6 py-4 font-semibold text-white">{dsai_user.email}</td>
-                    <td className="px-6 py-4 font-mono text-slate-400">{dsai_user.tenant_id}</td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-1.5">
-                        {dsai_user.roles.map((r) => (
-                          <span
-                            key={r}
-                            className="px-2 py-0.5 rounded font-mono text-[10px] bg-slate-800 text-blue-300 border border-slate-700 uppercase"
-                          >
-                            {r}
-                          </span>
-                        ))}
-                      </div>
+                {dsai_usersLoading ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-8 text-center text-slate-400">
+                      <Loader2 className="w-4 h-4 inline animate-spin mr-2" />
+                      Loading users from AuthService...
                     </td>
-                    <td className="px-6 py-4 text-slate-500">{dsai_user.created_at}</td>
                   </tr>
-                ))}
+                ) : dsai_usersError && dsai_users.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-8 text-center text-red-400">
+                      {dsai_usersError}
+                    </td>
+                  </tr>
+                ) : dsai_users.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-8 text-center text-slate-500">
+                      No users provisioned yet.
+                    </td>
+                  </tr>
+                ) : (
+                  dsai_users.map((dsai_user) => (
+                    <tr key={dsai_user.id} className="hover:bg-slate-800/40 transition-colors">
+                      <td className="px-6 py-4 font-semibold text-white">{dsai_user.email}</td>
+                      <td className="px-6 py-4 font-mono text-slate-400">{dsai_user.tenant_id}</td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-1.5">
+                          {dsai_user.roles.map((r) => (
+                            <span
+                              key={r}
+                              className="px-2 py-0.5 rounded font-mono text-[10px] bg-slate-800 text-blue-300 border border-slate-700 uppercase"
+                            >
+                              {r}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-slate-500">{dsai_user.created_at}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -415,7 +644,8 @@ export default function AdminPage() {
             <div>
               <h2 className="text-lg font-bold text-white">Programmatic API Keys</h2>
               <p className="text-xs text-slate-400">
-                Notice: Secret keys are hashed via Argon2id upon generation. Revocation is scheduled for a future release.
+                Notice: Secret keys are hashed via Argon2id upon generation and shown only once. Revocation
+                is scheduled for a future release.
               </p>
             </div>
             <button
@@ -438,14 +668,35 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 font-sans text-xs">
-                {dsai_apiKeys.map((dsai_key) => (
-                  <tr key={dsai_key.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="px-6 py-4 font-semibold text-white">{dsai_key.name}</td>
-                    <td className="px-6 py-4 font-mono text-slate-400">{dsai_key.prefix}••••••••</td>
-                    <td className="px-6 py-4 text-slate-500">{dsai_key.created_at}</td>
-                    <td className="px-6 py-4 text-slate-400">{dsai_key.expires_at}</td>
+                {dsai_apiKeysLoading ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-8 text-center text-slate-400">
+                      <Loader2 className="w-4 h-4 inline animate-spin mr-2" />
+                      Loading API keys from AuthService...
+                    </td>
                   </tr>
-                ))}
+                ) : dsai_apiKeysError && dsai_apiKeys.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-8 text-center text-red-400">
+                      {dsai_apiKeysError}
+                    </td>
+                  </tr>
+                ) : dsai_apiKeys.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-8 text-center text-slate-500">
+                      No API keys generated yet.
+                    </td>
+                  </tr>
+                ) : (
+                  dsai_apiKeys.map((dsai_key) => (
+                    <tr key={dsai_key.id} className="hover:bg-slate-800/40 transition-colors">
+                      <td className="px-6 py-4 font-semibold text-white">{dsai_key.name}</td>
+                      <td className="px-6 py-4 font-mono text-slate-400">{dsai_key.prefix}••••••••</td>
+                      <td className="px-6 py-4 text-slate-500">{dsai_key.created_at}</td>
+                      <td className="px-6 py-4 text-slate-400">{dsai_key.expires_at}</td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -492,6 +743,9 @@ export default function AdminPage() {
                 </select>
               </div>
             </div>
+            {dsai_createTenantError && (
+              <p className="text-xs text-red-400">{dsai_createTenantError}</p>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setDsaiShowCreateTenant(false)}
@@ -501,9 +755,10 @@ export default function AdminPage() {
               </button>
               <button
                 onClick={dsai_handleCreateTenant}
-                disabled={!dsai_newTenantName || !dsai_newTenantSlug}
-                className="px-4 py-2 bg-blue-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold"
+                disabled={!dsai_newTenantName || !dsai_newTenantSlug || dsai_createTenantBusy}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold"
               >
+                {dsai_createTenantBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 Provision Tenant
               </button>
             </div>
@@ -544,8 +799,11 @@ export default function AdminPage() {
                   onChange={(e) => setDsaiNewUserTenant(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white text-sm"
                 >
+                  <option value="" disabled>
+                    Select a tenant…
+                  </option>
                   {dsai_tenants.map((t) => (
-                    <option key={t.slug} value={t.slug}>
+                    <option key={t.id} value={t.id}>
                       {t.name} ({t.slug})
                     </option>
                   ))}
@@ -564,6 +822,9 @@ export default function AdminPage() {
                 </select>
               </div>
             </div>
+            {dsai_createUserError && (
+              <p className="text-xs text-red-400">{dsai_createUserError}</p>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setDsaiShowCreateUser(false)}
@@ -573,9 +834,10 @@ export default function AdminPage() {
               </button>
               <button
                 onClick={dsai_handleCreateUser}
-                disabled={!dsai_newUserEmail || !dsai_newUserPassword}
-                className="px-4 py-2 bg-blue-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold"
+                disabled={!dsai_newUserEmail || !dsai_newUserPassword || !dsai_newUserTenant || dsai_createUserBusy}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold"
               >
+                {dsai_createUserBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 Create User
               </button>
             </div>
@@ -612,6 +874,9 @@ export default function AdminPage() {
                 </select>
               </div>
             </div>
+            {dsai_createKeyError && (
+              <p className="text-xs text-red-400">{dsai_createKeyError}</p>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button
                 onClick={() => setDsaiShowCreateApiKey(false)}
@@ -621,9 +886,10 @@ export default function AdminPage() {
               </button>
               <button
                 onClick={dsai_handleCreateApiKey}
-                disabled={!dsai_newKeyName}
-                className="px-4 py-2 bg-blue-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold"
+                disabled={!dsai_newKeyName || dsai_createKeyBusy}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold"
               >
+                {dsai_createKeyBusy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 Generate Key
               </button>
             </div>

@@ -15,6 +15,10 @@ from deepSightAI.Trinetra.AuthService.auth_service import (
     app,
     User,
     Tenant,
+    UserTenant,
+    Role,
+    UserRole,
+    APIKey,
     Base,
     get_db,
     create_access_token,
@@ -238,6 +242,241 @@ class TestAuthService:
             headers={"Authorization": f"Bearer {dsai_token}"},
         )
         assert dsai_resp_404.status_code == 404
+
+    def test_dsai_create_tenant_requires_admin(self, client, test_db):
+        """POST /tenants should reject callers without the 'admin' role."""
+        dsai_token = create_access_token({
+            "sub": "1", "email": "operator@example.com", "tenant_id": None, "roles": ["operator"],
+        })
+        dsai_resp = client.post(
+            "/tenants",
+            json={"name": "Beta Corp", "slug": "beta-corp", "sector": "commercial"},
+            headers={"Authorization": f"Bearer {dsai_token}"},
+        )
+        assert dsai_resp.status_code == 403
+
+    def test_dsai_create_tenant_persists_sector_in_plugin_config(self, client, test_db):
+        """POST /tenants should create a tenant and store sector in plugin_config."""
+        dsai_token = create_access_token({
+            "sub": "1", "email": "admin@example.com", "tenant_id": None, "roles": ["admin"],
+        })
+        dsai_resp = client.post(
+            "/tenants",
+            json={"name": "Beta Corp", "slug": "beta-corp", "sector": "logistics"},
+            headers={"Authorization": f"Bearer {dsai_token}"},
+        )
+        assert dsai_resp.status_code == 201
+        dsai_data = dsai_resp.json()
+        assert dsai_data["slug"] == "beta-corp"
+        assert dsai_data["plugin_config"]["sector"] == "logistics"
+
+        # Duplicate slug should be rejected
+        dsai_dup = client.post(
+            "/tenants",
+            json={"name": "Beta Corp 2", "slug": "beta-corp", "sector": "logistics"},
+            headers={"Authorization": f"Bearer {dsai_token}"},
+        )
+        assert dsai_dup.status_code == 400
+
+    def test_dsai_list_tenants_requires_admin_and_returns_created_tenants(self, client, test_db):
+        """GET /tenants should list tenants, admin only."""
+        dsai_db = test_db()
+        dsai_db.add(Tenant(name="Gamma Corp", slug="gamma-corp", active=True, plugin_config={"sector": "commercial"}))
+        dsai_db.commit()
+
+        dsai_operator_token = create_access_token({
+            "sub": "1", "email": "operator@example.com", "tenant_id": None, "roles": ["operator"],
+        })
+        assert client.get("/tenants", headers={"Authorization": f"Bearer {dsai_operator_token}"}).status_code == 403
+
+        dsai_admin_token = create_access_token({
+            "sub": "1", "email": "admin@example.com", "tenant_id": None, "roles": ["admin"],
+        })
+        dsai_resp = client.get("/tenants", headers={"Authorization": f"Bearer {dsai_admin_token}"})
+        assert dsai_resp.status_code == 200
+        dsai_slugs = [t["slug"] for t in dsai_resp.json()]
+        assert "gamma-corp" in dsai_slugs
+
+    def test_dsai_create_tenant_user_provisions_membership_and_role(self, client, test_db):
+        """POST /tenants/{tenant_id}/users should create the user, membership, and role assignment."""
+        dsai_db = test_db()
+        dsai_tenant = Tenant(name="Delta Corp", slug="delta-corp", active=True, plugin_config={})
+        dsai_db.add(dsai_tenant)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_tenant)
+
+        dsai_admin_token = create_access_token({
+            "sub": "1", "email": "admin@example.com", "tenant_id": None, "roles": ["admin"],
+        })
+        dsai_resp = client.post(
+            f"/tenants/{dsai_tenant.id}/users",
+            json={"email": "officer@delta.example", "password": "supersecret1", "role": "operator"},
+            headers={"Authorization": f"Bearer {dsai_admin_token}"},
+        )
+        assert dsai_resp.status_code == 201
+        dsai_data = dsai_resp.json()
+        assert dsai_data["email"] == "officer@delta.example"
+        assert dsai_data["roles"] == ["operator"]
+
+        dsai_user = dsai_db.query(User).filter(User.email == "officer@delta.example").first()
+        assert dsai_user is not None
+        dsai_membership = (
+            dsai_db.query(UserTenant)
+            .filter(UserTenant.user_id == dsai_user.id, UserTenant.tenant_id == dsai_tenant.id)
+            .first()
+        )
+        assert dsai_membership is not None
+        dsai_role = dsai_db.query(Role).filter(Role.tenant_id == dsai_tenant.id, Role.name == "operator").first()
+        assert dsai_role is not None
+        dsai_assignment = (
+            dsai_db.query(UserRole)
+            .filter(UserRole.user_tenant_id == dsai_membership.id, UserRole.role_id == dsai_role.id)
+            .first()
+        )
+        assert dsai_assignment is not None
+
+        # Calling again with the same email should attach the existing user, not duplicate it
+        dsai_resp2 = client.post(
+            f"/tenants/{dsai_tenant.id}/users",
+            json={"email": "officer@delta.example", "password": "irrelevant1", "role": "viewer"},
+            headers={"Authorization": f"Bearer {dsai_admin_token}"},
+        )
+        assert dsai_resp2.status_code == 201
+        assert dsai_db.query(User).filter(User.email == "officer@delta.example").count() == 1
+
+    def test_dsai_create_tenant_user_requires_admin(self, client, test_db):
+        """POST /tenants/{tenant_id}/users should reject callers without the 'admin' role."""
+        dsai_db = test_db()
+        dsai_tenant = Tenant(name="Epsilon Corp", slug="epsilon-corp", active=True, plugin_config={})
+        dsai_db.add(dsai_tenant)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_tenant)
+
+        dsai_token = create_access_token({
+            "sub": "1", "email": "operator@example.com", "tenant_id": dsai_tenant.id, "roles": ["operator"],
+        })
+        dsai_resp = client.post(
+            f"/tenants/{dsai_tenant.id}/users",
+            json={"email": "x@example.com", "password": "supersecret1", "role": "operator"},
+            headers={"Authorization": f"Bearer {dsai_token}"},
+        )
+        assert dsai_resp.status_code == 403
+
+    def test_dsai_update_tenant_status_requires_admin_and_toggles_active(self, client, test_db):
+        """PATCH /tenants/{tenant_id} should require 'admin' and update the active flag."""
+        dsai_db = test_db()
+        dsai_tenant = Tenant(name="Zeta Corp", slug="zeta-corp", active=True, plugin_config={})
+        dsai_db.add(dsai_tenant)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_tenant)
+
+        dsai_operator_token = create_access_token({
+            "sub": "1", "email": "operator@example.com", "tenant_id": dsai_tenant.id, "roles": ["operator"],
+        })
+        dsai_denied = client.patch(
+            f"/tenants/{dsai_tenant.id}",
+            json={"active": False},
+            headers={"Authorization": f"Bearer {dsai_operator_token}"},
+        )
+        assert dsai_denied.status_code == 403
+
+        dsai_admin_token = create_access_token({
+            "sub": "1", "email": "admin@example.com", "tenant_id": None, "roles": ["admin"],
+        })
+        dsai_resp = client.patch(
+            f"/tenants/{dsai_tenant.id}",
+            json={"active": False},
+            headers={"Authorization": f"Bearer {dsai_admin_token}"},
+        )
+        assert dsai_resp.status_code == 200
+        assert dsai_resp.json()["active"] is False
+
+        dsai_db.refresh(dsai_tenant)
+        assert dsai_tenant.active is False
+
+    def test_dsai_list_tenant_users_requires_admin_and_returns_roles(self, client, test_db):
+        """GET /tenants/{tenant_id}/users should list members with their roles, admin only."""
+        dsai_db = test_db()
+        dsai_tenant = Tenant(name="Eta Corp", slug="eta-corp", active=True, plugin_config={})
+        dsai_db.add(dsai_tenant)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_tenant)
+
+        dsai_admin_token = create_access_token({
+            "sub": "1", "email": "admin@example.com", "tenant_id": None, "roles": ["admin"],
+        })
+        dsai_create_resp = client.post(
+            f"/tenants/{dsai_tenant.id}/users",
+            json={"email": "member@eta.example", "password": "supersecret1", "role": "viewer"},
+            headers={"Authorization": f"Bearer {dsai_admin_token}"},
+        )
+        assert dsai_create_resp.status_code == 201
+
+        dsai_operator_token = create_access_token({
+            "sub": "1", "email": "operator@example.com", "tenant_id": dsai_tenant.id, "roles": ["operator"],
+        })
+        assert client.get(
+            f"/tenants/{dsai_tenant.id}/users",
+            headers={"Authorization": f"Bearer {dsai_operator_token}"},
+        ).status_code == 403
+
+        dsai_list_resp = client.get(
+            f"/tenants/{dsai_tenant.id}/users",
+            headers={"Authorization": f"Bearer {dsai_admin_token}"},
+        )
+        assert dsai_list_resp.status_code == 200
+        dsai_emails = [u["email"] for u in dsai_list_resp.json()]
+        assert "member@eta.example" in dsai_emails
+        dsai_member = next(u for u in dsai_list_resp.json() if u["email"] == "member@eta.example")
+        assert dsai_member["roles"] == ["viewer"]
+
+    def test_dsai_list_api_keys_requires_admin_and_omits_secrets(self, client, test_db):
+        """GET /auth/api-keys should list keys for the caller's tenant without exposing the hash."""
+        dsai_db = test_db()
+        dsai_tenant = Tenant(name="Theta Corp", slug="theta-corp", active=True, plugin_config={})
+        dsai_db.add(dsai_tenant)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_tenant)
+
+        dsai_user = User(
+            email="keyowner@theta.example",
+            full_name="Key Owner",
+            password_hash=get_password_hash("supersecret1"),
+            email_verified=True,
+        )
+        dsai_db.add(dsai_user)
+        dsai_db.commit()
+        dsai_db.refresh(dsai_user)
+
+        dsai_db.add(APIKey(
+            tenant_id=dsai_tenant.id,
+            user_id=dsai_user.id,
+            prefix="cp_testkey1",
+            key_hash="irrelevant-hash",
+            name="CI Ingest Key",
+            permissions="[]",
+            expires_at=datetime.utcnow() + timedelta(days=30),
+        ))
+        dsai_db.commit()
+
+        dsai_operator_token = create_access_token({
+            "sub": str(dsai_user.id), "email": dsai_user.email, "tenant_id": dsai_tenant.id, "roles": ["operator"],
+        })
+        assert client.get(
+            "/auth/api-keys", headers={"Authorization": f"Bearer {dsai_operator_token}"}
+        ).status_code == 403
+
+        dsai_admin_token = create_access_token({
+            "sub": str(dsai_user.id), "email": dsai_user.email, "tenant_id": dsai_tenant.id, "roles": ["admin"],
+        })
+        dsai_resp = client.get("/auth/api-keys", headers={"Authorization": f"Bearer {dsai_admin_token}"})
+        assert dsai_resp.status_code == 200
+        dsai_keys = dsai_resp.json()
+        assert len(dsai_keys) == 1
+        assert dsai_keys[0]["name"] == "CI Ingest Key"
+        assert dsai_keys[0]["prefix"] == "cp_testkey1"
+        assert "key_hash" not in dsai_keys[0]
+        assert "key" not in dsai_keys[0]
 
 
 # Helper function needed in test

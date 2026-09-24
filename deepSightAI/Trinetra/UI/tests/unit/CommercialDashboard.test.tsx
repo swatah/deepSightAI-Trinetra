@@ -1,6 +1,21 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { useSession } from "next-auth/react";
 import CommercialDashboard from "../../app/dashboard/commercial/page";
+
+jest.mock("next-auth/react", () => ({
+  useSession: jest.fn(),
+}));
+
+// Admin bypasses the sector gate (SectorGate allows admins regardless of
+// tenant sector) so these tests can exercise dashboard content directly.
+const mockUseSession = useSession as jest.Mock;
+beforeEach(() => {
+  mockUseSession.mockReturnValue({
+    data: { user: { name: "Super Admin" }, dsai_roles: ["admin"] },
+    status: "authenticated",
+  });
+});
 
 // Mock canvas 2D context for jsdom
 beforeAll(() => {
