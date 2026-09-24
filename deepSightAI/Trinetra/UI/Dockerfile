@@ -8,7 +8,7 @@
 # Standalone output: relies on `output: 'standalone'` in next.config.js.
 
 # ── Stage 1: dependency installer ──────────────────────────────────────────
-FROM node:18-alpine AS deps
+FROM node:25-alpine AS deps
 
 RUN apk add --no-cache libc6-compat
 
@@ -18,7 +18,7 @@ COPY deepSightAI/Trinetra/UI/package.json deepSightAI/Trinetra/UI/package-lock.j
 RUN npm ci --omit=dev --ignore-scripts
 
 # ── Stage 2: Next.js builder ────────────────────────────────────────────────
-FROM node:18-alpine AS builder
+FROM node:25-alpine AS builder
 
 WORKDIR /app
 
@@ -30,7 +30,7 @@ COPY deepSightAI/Trinetra/UI/ .
 RUN npm run build
 
 # ── Stage 3: minimal production runner ─────────────────────────────────────
-FROM node:18-alpine AS runner
+FROM node:25-alpine AS runner
 
 WORKDIR /app
 
