@@ -89,8 +89,8 @@ export default function AdminPage() {
   const [dsai_togglingTenantId, setDsaiTogglingTenantId] = useState<string | null>(null);
   const [dsai_toggleTenantError, setDsaiToggleTenantError] = useState<string | null>(null);
 
-  // Users state — aggregated by fetching GET /tenants/{id}/users for every
-  // known tenant, since there is no single cross-tenant user-listing endpoint.
+  // Users state — fetched in a single call to GET /users (admin-scoped,
+  // cross-tenant), optionally filterable by ?tenant_id= server-side.
   const [dsai_users, setDsaiUsers] = useState<UserRecord[]>([]);
   const [dsai_usersLoading, setDsaiUsersLoading] = useState(false);
   const [dsai_usersError, setDsaiUsersError] = useState<string | null>(null);
@@ -145,28 +145,19 @@ export default function AdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dsai_adminAccess, dsai_accessToken]);
 
-  const dsai_tenantIdsKey = dsai_tenants.map((t) => t.id).join(",");
-
   useEffect(() => {
-    if (!dsai_adminAccess || !dsai_accessToken || dsai_tenants.length === 0) return;
+    if (!dsai_adminAccess || !dsai_accessToken) return;
     let dsai_cancelled = false;
     setDsaiUsersLoading(true);
     setDsaiUsersError(null);
 
-    Promise.all(
-      dsai_tenants.map((dsai_tenant) =>
-        dsai_apiGet<
-          { id: string; email: string; tenant_id: string; roles: string[]; created_at: string | null }[]
-        >(`auth/tenants/${dsai_tenant.id}/users`, dsai_accessToken, dsai_tenantId ?? "").catch(() => [])
-      )
-    )
-      .then((dsai_perTenant) => {
-        if (dsai_cancelled) return;
-        const dsai_flat = dsai_perTenant
-          .flat()
-          .filter((dsai_u): dsai_u is NonNullable<typeof dsai_u> => Boolean(dsai_u));
+    dsai_apiGet<
+      { id: string; email: string; tenant_id: string; roles: string[]; created_at: string | null }[]
+    >("auth/users", dsai_accessToken, dsai_tenantId ?? "")
+      .then((dsai_raw) => {
+        if (dsai_cancelled || !dsai_raw) return;
         setDsaiUsers(
-          dsai_flat.map((dsai_u) => ({
+          dsai_raw.map((dsai_u) => ({
             id: dsai_u.id,
             email: dsai_u.email,
             tenant_id: dsai_u.tenant_id,
@@ -189,7 +180,7 @@ export default function AdminPage() {
       dsai_cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dsai_adminAccess, dsai_accessToken, dsai_tenantIdsKey]);
+  }, [dsai_adminAccess, dsai_accessToken]);
 
   useEffect(() => {
     if (!dsai_adminAccess || !dsai_accessToken) return;
@@ -567,8 +558,7 @@ export default function AdminPage() {
             <div>
               <h2 className="text-lg font-bold text-white">Platform Users & Roles</h2>
               <p className="text-xs text-slate-400">
-                Aggregated by listing members of every known tenant — there is no single
-                cross-tenant user endpoint on AuthService.
+                Live from AuthService via a single cross-tenant listing call.
               </p>
             </div>
             <button

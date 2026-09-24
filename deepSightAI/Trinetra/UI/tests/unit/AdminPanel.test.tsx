@@ -186,4 +186,40 @@ describe("Super-Admin Panel Suite (#53)", () => {
 
     dsai_apiPatchMock.mockReset();
   });
+
+  it("loads the Users tab via a single GET to /auth/users, not one request per tenant", async () => {
+    mockUseSession.mockReturnValue({
+      data: {
+        user: { name: "Super Admin" },
+        dsai_roles: ["admin"],
+        dsai_accessToken: "test-token",
+        dsai_tenantId: "1",
+      },
+      status: "authenticated",
+    });
+
+    dsai_apiGetMock.mockImplementation((dsai_path: string) => {
+      if (dsai_path === "auth/tenants") {
+        return Promise.resolve([
+          { id: "9", name: "Tenant Nine", slug: "tenant-nine", active: true, created_at: "2026-09-24T00:00:00Z", plugin_config: {} },
+          { id: "10", name: "Tenant Ten", slug: "tenant-ten", active: true, created_at: "2026-09-24T00:00:00Z", plugin_config: {} },
+        ]);
+      }
+      if (dsai_path === "auth/users") {
+        return Promise.resolve([
+          { id: "1", email: "member@nine.example", tenant_id: "9", roles: ["viewer"], created_at: "2026-09-24T00:00:00Z" },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<AdminPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Users$/i }));
+
+    await screen.findByText("member@nine.example");
+    expect(dsai_apiGetMock).toHaveBeenCalledWith("auth/users", "test-token", "1");
+    expect(dsai_apiGetMock).not.toHaveBeenCalledWith("auth/tenants/9/users", "test-token", "1");
+    expect(dsai_apiGetMock).not.toHaveBeenCalledWith("auth/tenants/10/users", "test-token", "1");
+  });
 });

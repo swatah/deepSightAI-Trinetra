@@ -430,6 +430,51 @@ class TestAuthService:
         dsai_member = next(u for u in dsai_list_resp.json() if u["email"] == "member@eta.example")
         assert dsai_member["roles"] == ["viewer"]
 
+    def test_dsai_list_users_across_tenants_in_single_call(self, client, test_db):
+        """GET /users should list members across all tenants in one call, filterable by tenant_id, admin only."""
+        dsai_db = test_db()
+        dsai_tenant_a = Tenant(name="Iota Corp", slug="iota-corp", active=True, plugin_config={})
+        dsai_tenant_b = Tenant(name="Kappa Corp", slug="kappa-corp", active=True, plugin_config={})
+        dsai_db.add_all([dsai_tenant_a, dsai_tenant_b])
+        dsai_db.commit()
+        dsai_db.refresh(dsai_tenant_a)
+        dsai_db.refresh(dsai_tenant_b)
+
+        dsai_admin_token = create_access_token({
+            "sub": "1", "email": "admin@example.com", "tenant_id": None, "roles": ["admin"],
+        })
+        assert client.post(
+            f"/tenants/{dsai_tenant_a.id}/users",
+            json={"email": "member-a@iota.example", "password": "supersecret1", "role": "viewer"},
+            headers={"Authorization": f"Bearer {dsai_admin_token}"},
+        ).status_code == 201
+        assert client.post(
+            f"/tenants/{dsai_tenant_b.id}/users",
+            json={"email": "member-b@kappa.example", "password": "supersecret1", "role": "operator"},
+            headers={"Authorization": f"Bearer {dsai_admin_token}"},
+        ).status_code == 201
+
+        dsai_operator_token = create_access_token({
+            "sub": "1", "email": "operator@example.com", "tenant_id": dsai_tenant_a.id, "roles": ["operator"],
+        })
+        assert client.get(
+            "/users", headers={"Authorization": f"Bearer {dsai_operator_token}"}
+        ).status_code == 403
+
+        dsai_all_resp = client.get("/users", headers={"Authorization": f"Bearer {dsai_admin_token}"})
+        assert dsai_all_resp.status_code == 200
+        dsai_all_emails = {u["email"] for u in dsai_all_resp.json()}
+        assert "member-a@iota.example" in dsai_all_emails
+        assert "member-b@kappa.example" in dsai_all_emails
+
+        dsai_scoped_resp = client.get(
+            f"/users?tenant_id={dsai_tenant_a.id}",
+            headers={"Authorization": f"Bearer {dsai_admin_token}"},
+        )
+        assert dsai_scoped_resp.status_code == 200
+        dsai_scoped_emails = {u["email"] for u in dsai_scoped_resp.json()}
+        assert dsai_scoped_emails == {"member-a@iota.example"}
+
     def test_dsai_list_api_keys_requires_admin_and_omits_secrets(self, client, test_db):
         """GET /auth/api-keys should list keys for the caller's tenant without exposing the hash."""
         dsai_db = test_db()

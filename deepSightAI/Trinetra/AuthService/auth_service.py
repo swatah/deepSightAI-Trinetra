@@ -1078,6 +1078,46 @@ def dsai_list_tenant_users(
     return dsai_results
 
 
+@app.get("/users")
+def dsai_list_users(
+    tenant_id: Optional[int] = None,
+    dsai_payload: dict = Depends(require_auth),
+    dsai_db: Session = Depends(get_db),
+):
+    """List active users across all tenants in a single query, optionally filtered
+    by tenant_id. Admin only. Replaces per-tenant looping on the client."""
+    if "admin" not in dsai_payload.get("roles", []):
+        raise HTTPException(status_code=403, detail="Only platform administrators can list users")
+
+    dsai_query = dsai_db.query(UserTenant).filter(UserTenant.status == "active")
+    if tenant_id is not None:
+        dsai_query = dsai_query.filter(UserTenant.tenant_id == tenant_id)
+    dsai_memberships = dsai_query.order_by(UserTenant.joined_at.desc()).all()
+
+    dsai_roles_by_membership: dict = {}
+    dsai_membership_ids = [dsai_m.id for dsai_m in dsai_memberships]
+    if dsai_membership_ids:
+        dsai_role_rows = (
+            dsai_db.query(UserRole.user_tenant_id, Role.name)
+            .join(Role, UserRole.role_id == Role.id)
+            .filter(UserRole.user_tenant_id.in_(dsai_membership_ids))
+            .all()
+        )
+        for dsai_ut_id, dsai_role_name in dsai_role_rows:
+            dsai_roles_by_membership.setdefault(dsai_ut_id, []).append(dsai_role_name)
+
+    return [
+        {
+            "id": str(dsai_m.user.id),
+            "email": dsai_m.user.email,
+            "tenant_id": str(dsai_m.tenant_id),
+            "roles": dsai_roles_by_membership.get(dsai_m.id, []),
+            "created_at": dsai_m.joined_at.isoformat() if dsai_m.joined_at else None,
+        }
+        for dsai_m in dsai_memberships
+    ]
+
+
 @app.delete("/tenants/{tenant_id}")
 def delete_tenant(
     tenant_id: int,
