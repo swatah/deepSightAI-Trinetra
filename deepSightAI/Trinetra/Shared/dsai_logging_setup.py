@@ -12,6 +12,21 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 
+from contextvars import ContextVar
+
+_DSAI_CORRELATION_ID_CTX: ContextVar[Optional[str]] = ContextVar("dsai_correlation_id", default=None)
+
+
+def dsai_set_correlation_id(dsai_cid: Optional[str]) -> None:
+    """Set the current execution context's correlation ID."""
+    _DSAI_CORRELATION_ID_CTX.set(dsai_cid)
+
+
+def dsai_get_correlation_id() -> Optional[str]:
+    """Retrieve the current execution context's correlation ID."""
+    return _DSAI_CORRELATION_ID_CTX.get()
+
+
 class DSAIJsonFormatter(logging.Formatter):
     """Formats log records as JSON lines with standardized fields."""
 
@@ -32,6 +47,12 @@ class DSAIJsonFormatter(logging.Formatter):
         for dsai_field in ["tenant_id", "camera_id", "video_id", "correlation_id", "job_id"]:
             if hasattr(record, dsai_field):
                 dsai_log_record[dsai_field] = getattr(record, dsai_field)
+
+        # Automatically inject correlation_id from contextvar if not already present
+        if "correlation_id" not in dsai_log_record:
+            dsai_ctx_cid = dsai_get_correlation_id()
+            if dsai_ctx_cid:
+                dsai_log_record["correlation_id"] = dsai_ctx_cid
 
         # Include exception info if available
         if record.exc_info:

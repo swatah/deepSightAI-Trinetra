@@ -52,6 +52,9 @@ services:
       - MINIO_URL=http://minio:9000
       - EXTRACTOR_ID=extractor-1
       - EXTRACTOR_URL=http://extractor-1:8001
+      - RTSP_CAPACITY=8
+      - RTSP_HARD_LIMIT=8
+      - DSAI_ENABLE_HW_DECODE=1
     depends_on: { registry: { condition: service_healthy }, minio: { condition: service_healthy } }
     networks: [ video-net ]
 

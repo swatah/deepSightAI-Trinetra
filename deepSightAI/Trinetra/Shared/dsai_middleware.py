@@ -77,8 +77,12 @@ def dsai_require_auth(dsai_request: Request) -> Dict[str, Any]:
         dsai_request.state.user = payload
         dsai_request.state.tenant_id = payload.get("tenant_id")
     """
-    # Allow probe and documentation endpoints without auth
-    if dsai_request.url.path in DSAI_PROBE_PATHS:
+    # Allow probe, documentation, and edge endpoints without user JWT auth (edge has dedicated credential auth)
+    if (
+        dsai_request.url.path in DSAI_PROBE_PATHS
+        or dsai_request.url.path.startswith("/v1/edge/")
+        or dsai_request.url.path.startswith("/v0/edge/")
+    ):
         return {}
 
     dsai_auth_header = dsai_request.headers.get("Authorization")

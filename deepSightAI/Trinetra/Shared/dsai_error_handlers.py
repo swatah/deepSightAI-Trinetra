@@ -103,6 +103,9 @@ async def dsai_http_exception_handler(dsai_request: Request, dsai_exc: HTTPExcep
         f"HTTPException [{dsai_exc.status_code}] on {dsai_request.method} {dsai_request.url.path} "
         f"(request_id={dsai_req_id}): {dsai_exc.detail}"
     )
+    dsai_headers = {"X-Request-ID": dsai_req_id}
+    if dsai_exc.headers:
+        dsai_headers.update(dsai_exc.headers)
     return JSONResponse(
         status_code=dsai_exc.status_code,
         content={
@@ -111,7 +114,7 @@ async def dsai_http_exception_handler(dsai_request: Request, dsai_exc: HTTPExcep
             "detail": dsai_sanitize_detail(dsai_exc.detail),
             "request_id": dsai_req_id,
         },
-        headers={"X-Request-ID": dsai_req_id}
+        headers=dsai_headers
     )
 
 

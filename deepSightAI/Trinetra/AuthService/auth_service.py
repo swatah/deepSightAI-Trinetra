@@ -14,6 +14,8 @@ import string
 import hashlib
 import httpx
 import urllib.parse
+import uuid
+import threading
 from datetime import datetime, timedelta
 from typing import Optional, List
 
@@ -230,6 +232,26 @@ class PasswordResetToken(Base):
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class EdgeDevice(Base):
+    """
+    Edge device credentials and camera assignments (E3, E4, Issue #77).
+    """
+    __tablename__ = "edge_devices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    device_id = Column(String(100), unique=True, index=True, nullable=False)
+    tenant_id = Column(String(100), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    api_key_prefix = Column(String(32), nullable=False)
+    api_key_hash = Column(String(255), nullable=False)
+    assigned_cameras = Column(JSON, nullable=False, default=list)
+    revoked = Column(Boolean, default=False, nullable=False)
+    failed_auth_count = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 # ============================================================================
@@ -1202,6 +1224,233 @@ def update_tenant_plugins(
     db.commit()
 
     return {"message": "Plugin configuration updated", "tenant_id": tenant_id}
+
+
+# ============================================================================
+# Edge Device Endpoints (E3, E4, Issue #77)
+# ============================================================================
+
+class EdgeDeviceOnboardRequest(BaseModel):
+    device_id: Optional[str] = Field(None, description="Unique edge device identifier")
+    tenant_id: str = Field(..., min_length=1, description="Tenant identifier")
+    name: Optional[str] = Field(None, description="Device descriptive name")
+    device_name: Optional[str] = Field(None, description="Device descriptive name (alias)")
+    camera_id: Optional[str] = Field(None, description="Single assigned camera ID")
+    assigned_cameras: List[str] = Field(default_factory=list, description="List of camera IDs assigned to device")
+
+
+class EdgeDeviceOnboardResponse(BaseModel):
+    device_id: str
+    tenant_id: str
+    name: str
+    assigned_cameras: List[str]
+    api_key: str
+    prefix: str
+
+
+class EdgeDeviceVerifyRequest(BaseModel):
+    api_key: str = Field(..., min_length=1, description="API key of the edge device")
+    camera_id: str = Field(..., min_length=1, description="Camera submitting the event")
+    tenant_id: str = Field(..., min_length=1, description="Tenant submitting the event")
+    device_id: Optional[str] = None
+
+
+def dsai_hash_edge_key(dsai_key: str) -> str:
+    """Deterministic hash of plain edge API key for storage/lookup."""
+    return hashlib.sha256(dsai_key.encode("utf-8")).hexdigest()
+
+
+_dsai_edge_lockout_tracker = {}
+_dsai_edge_lockout_lock = threading.Lock()
+
+
+def dsai_verify_edge_device(
+    dsai_db: Session,
+    dsai_api_key: str,
+    dsai_camera_id: Optional[str] = None,
+    dsai_tenant_id: Optional[str] = None,
+    dsai_device_id: Optional[str] = None
+) -> EdgeDevice:
+    """
+    Core verification logic for edge device credentials (Issue #77).
+    Enforces expiration, revocation, lockout, and optional tenant and camera assignment.
+    """
+    dsai_key_clean = (dsai_api_key or "").strip()
+    if not dsai_key_clean:
+        raise HTTPException(status_code=401, detail="Missing or invalid edge device credential")
+
+    dsai_now = datetime.utcnow()
+    dsai_key_hash = dsai_hash_edge_key(dsai_key_clean)
+    dsai_prefix = dsai_key_clean[:12] if len(dsai_key_clean) >= 12 else dsai_key_clean
+    dsai_identifier = dsai_device_id or dsai_prefix or dsai_key_clean
+
+    with _dsai_edge_lockout_lock:
+        dsai_lock_info = _dsai_edge_lockout_tracker.get(dsai_identifier)
+        if dsai_lock_info and dsai_lock_info.get("locked_until") and dsai_now < dsai_lock_info["locked_until"]:
+            raise HTTPException(
+                status_code=429,
+                detail="Device temporarily locked out due to repeated authentication failures"
+            )
+
+    # Search for device by key hash or prefix
+    dsai_query = dsai_db.query(EdgeDevice)
+    if dsai_device_id:
+        dsai_query = dsai_query.filter(EdgeDevice.device_id == dsai_device_id)
+
+    dsai_device = dsai_query.filter(EdgeDevice.api_key_hash == dsai_key_hash).first()
+
+    if not dsai_device:
+        # Check if device exists by prefix or device_id to track failed attempt
+        dsai_candidate = None
+        if dsai_device_id:
+            dsai_candidate = dsai_db.query(EdgeDevice).filter(EdgeDevice.device_id == dsai_device_id).first()
+        elif dsai_prefix:
+            dsai_candidate = dsai_db.query(EdgeDevice).filter(EdgeDevice.api_key_prefix == dsai_prefix).first()
+
+        with _dsai_edge_lockout_lock:
+            dsai_info = _dsai_edge_lockout_tracker.setdefault(dsai_identifier, {"count": 0, "locked_until": None})
+            dsai_info["count"] += 1
+            if dsai_info["count"] >= 5:
+                dsai_info["locked_until"] = dsai_now + timedelta(minutes=15)
+                raise HTTPException(
+                    status_code=429,
+                    detail="Device temporarily locked out due to repeated authentication failures"
+                )
+
+        if dsai_candidate:
+            dsai_candidate.failed_auth_count += 1
+            if dsai_candidate.failed_auth_count >= 5:
+                dsai_candidate.locked_until = dsai_now + timedelta(minutes=15)
+            dsai_db.commit()
+            if dsai_candidate.locked_until and dsai_candidate.locked_until > dsai_now:
+                raise HTTPException(status_code=429, detail="Device temporarily locked out due to repeated authentication failures")
+
+        raise HTTPException(status_code=401, detail="Invalid edge device credential")
+
+    # Check lockout on device entity
+    if dsai_device.locked_until and dsai_now < dsai_device.locked_until:
+        raise HTTPException(
+            status_code=429,
+            detail="Device is temporarily locked due to repeated authentication failures"
+        )
+
+    # Check revocation (immediate per-request check)
+    if dsai_device.revoked:
+        raise HTTPException(status_code=401, detail="Edge device credential has been revoked")
+
+    # Check tenant isolation
+    if dsai_tenant_id is not None and str(dsai_device.tenant_id) != str(dsai_tenant_id):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Edge device tenant mismatch: registered for '{dsai_device.tenant_id}', called for '{dsai_tenant_id}'"
+        )
+
+    # Check camera assignment authorization (E4)
+    if dsai_camera_id is not None:
+        dsai_cameras = dsai_device.assigned_cameras or []
+        if dsai_camera_id not in dsai_cameras:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Device '{dsai_device.device_id}' is not authorized to submit embeddings for camera '{dsai_camera_id}'"
+            )
+
+    # Successful auth: reset failure count and update last_seen_at
+    with _dsai_edge_lockout_lock:
+        _dsai_edge_lockout_tracker.pop(dsai_identifier, None)
+
+    dsai_device.failed_auth_count = 0
+    dsai_device.locked_until = None
+    dsai_device.last_seen_at = dsai_now
+    dsai_db.commit()
+
+    return dsai_device
+
+
+@app.post("/auth/edge/devices", response_model=EdgeDeviceOnboardResponse, status_code=200)
+def dsai_onboard_edge_device(
+    dsai_req: EdgeDeviceOnboardRequest,
+    dsai_db: Session = Depends(get_db)
+):
+    """Onboard an edge device, assigning it to tenant and cameras (E3, E4, Issue #77)."""
+    dsai_dev_id = dsai_req.device_id or f"dev_{uuid.uuid4().hex[:12]}"
+    dsai_dev_name = dsai_req.name or dsai_req.device_name or dsai_dev_id
+    dsai_cams = list(dsai_req.assigned_cameras)
+    if dsai_req.camera_id and dsai_req.camera_id not in dsai_cams:
+        dsai_cams.append(dsai_req.camera_id)
+
+    dsai_existing = dsai_db.query(EdgeDevice).filter(EdgeDevice.device_id == dsai_dev_id).first()
+    if dsai_existing:
+        raise HTTPException(status_code=409, detail=f"Device '{dsai_dev_id}' already registered")
+
+    # Generate edge API key: clp_edge_<random32>
+    dsai_raw_key = f"clp_edge_{secrets.token_urlsafe(32)}"
+    dsai_prefix = dsai_raw_key[:12]
+    dsai_key_hash = dsai_hash_edge_key(dsai_raw_key)
+
+    dsai_new_device = EdgeDevice(
+        device_id=dsai_dev_id,
+        tenant_id=dsai_req.tenant_id,
+        name=dsai_dev_name,
+        api_key_prefix=dsai_prefix,
+        api_key_hash=dsai_key_hash,
+        assigned_cameras=dsai_cams,
+        revoked=False,
+        failed_auth_count=0,
+        created_at=datetime.utcnow()
+    )
+    dsai_db.add(dsai_new_device)
+    dsai_db.commit()
+    dsai_db.refresh(dsai_new_device)
+
+    return EdgeDeviceOnboardResponse(
+        device_id=dsai_new_device.device_id,
+        tenant_id=dsai_new_device.tenant_id,
+        name=dsai_new_device.name,
+        assigned_cameras=dsai_new_device.assigned_cameras,
+        api_key=dsai_raw_key,
+        prefix=dsai_prefix
+    )
+
+
+@app.post("/auth/edge/devices/{device_id}/revoke")
+def dsai_revoke_edge_device(
+    device_id: str,
+    dsai_db: Session = Depends(get_db)
+):
+    """Immediately revoke an edge device's access (E3, Issue #77)."""
+    dsai_device = dsai_db.query(EdgeDevice).filter(EdgeDevice.device_id == device_id).first()
+    if not dsai_device:
+        raise HTTPException(status_code=404, detail=f"Device '{device_id}' not found")
+
+    dsai_device.revoked = True
+    dsai_db.commit()
+    return {
+        "message": f"Edge device '{device_id}' has been revoked immediately.",
+        "device_id": device_id,
+        "revoked": True
+    }
+
+
+@app.post("/auth/edge/verify")
+def dsai_verify_edge_device_endpoint(
+    dsai_req: EdgeDeviceVerifyRequest,
+    dsai_db: Session = Depends(get_db)
+):
+    """Verify edge device credentials against tenant and camera (E3, E4, Issue #77)."""
+    dsai_device = dsai_verify_edge_device(
+        dsai_db=dsai_db,
+        dsai_api_key=dsai_req.api_key,
+        dsai_camera_id=dsai_req.camera_id,
+        dsai_tenant_id=dsai_req.tenant_id,
+        dsai_device_id=dsai_req.device_id
+    )
+    return {
+        "valid": True,
+        "device_id": dsai_device.device_id,
+        "tenant_id": dsai_device.tenant_id,
+        "camera_id": dsai_req.camera_id
+    }
+
 
 
 def _cleanup_redis(tenant_id: int):

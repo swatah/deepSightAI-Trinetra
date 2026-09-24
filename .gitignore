@@ -21,6 +21,7 @@ env/
 # IDE
 .vscode/
 .idea/
+.claude/
 *.egg-info/
 build/
 dist/

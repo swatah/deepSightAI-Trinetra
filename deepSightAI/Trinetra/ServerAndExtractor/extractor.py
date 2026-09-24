@@ -45,13 +45,65 @@ VIDEO_BUCKET = "videos"
 FRAME_BUCKET = "frames"  # Used for file jobs
 CONTROL_STREAM = "control:ingest"  # For publishing events; will also have frames:{video_id} later but we use control for now per design? Actually design says frames go to frames:{video_id}. We'll use that.
 
+from deepSightAI.Trinetra.Shared.dsai_feature_flag import dsai_is_hw_decode_enabled
+from deepSightAI.Trinetra.Shared.Metrics import (
+    dsai_record_pull_stream_count,
+    dsai_record_pull_latency,
+    dsai_record_pull_error
+)
+from deepSightAI.Trinetra.Shared.dsai_startup_validation import dsai_validate_startup_config
+from deepSightAI.Trinetra.Shared.dsai_circuit_breaker import dsai_get_circuit_breaker
+
 EXTRACTION_FPS = int(os.getenv("EXTRACTION_FPS", get_config("extraction.fps", 5)))
 EXTRACTOR_THREADS = int(os.getenv("EXTRACTOR_THREADS", get_config("extraction.extractor_threads", 4)))
 
-# RTSP concurrency: how many live camera feeds this process accepts.
-# Hard-capped at 6 regardless of what the config file or env var says.
-RTSP_SOFT_LIMIT = int(os.getenv("RTSP_SOFT_LIMIT", get_config("extraction.rtsp_soft_limit", 3)))
-RTSP_HARD_LIMIT = min(6, int(os.getenv("RTSP_HARD_LIMIT", get_config("extraction.rtsp_hard_limit", 6))))
+
+def dsai_detect_hardware_decoder() -> tuple:
+    """
+    Detect available hardware video decoders at startup (Issue #71, P3, Issue #87).
+    Returns (decoder_element_name, is_hardware_accelerated).
+    """
+    if not dsai_is_hw_decode_enabled():
+        print(f"[{EXTRACTOR_ID}] Hardware decode disabled via feature flag; using software decode (avdec_h264).")
+        return "avdec_h264", False
+
+    if Gst is not None:
+        try:
+            # Check NVIDIA decoders
+            if Gst.ElementFactory.find("nvv4l2decoder"):
+                print(f"[{EXTRACTOR_ID}] Detected NVIDIA hardware decoder: nvv4l2decoder")
+                return "nvv4l2decoder", True
+            if Gst.ElementFactory.find("nvdec"):
+                print(f"[{EXTRACTOR_ID}] Detected NVIDIA hardware decoder: nvdec")
+                return "nvdec", True
+            # Check Intel QuickSync / VA-API decoder
+            if Gst.ElementFactory.find("vaapih264dec"):
+                print(f"[{EXTRACTOR_ID}] Detected Intel VA-API hardware decoder: vaapih264dec")
+                return "vaapih264dec", True
+        except Exception as e:
+            print(f"[{EXTRACTOR_ID}] Error checking GStreamer element factories: {e}")
+
+    print(f"[{EXTRACTOR_ID}] WARNING: No hardware video decoder found. Falling back to software decode (avdec_h264) and reducing node capacity.")
+    return "avdec_h264", False
+
+
+DSAI_SELECTED_DECODER, DSAI_IS_HW_ACCELERATED = dsai_detect_hardware_decoder()
+
+def dsai_derive_node_capacity(dsai_is_hw: Optional[bool] = None) -> int:
+    """Derive extractor node RTSP stream capacity based on hardware acceleration headroom (Issue #72)."""
+    hw = dsai_is_hw if dsai_is_hw is not None else DSAI_IS_HW_ACCELERATED
+    if hw:
+        return int(os.getenv("RTSP_CAPACITY", os.getenv("DSAI_HW_DECODE_CAPACITY", os.getenv("RTSP_HARD_LIMIT", "8"))))
+    return int(os.getenv("RTSP_CAPACITY", os.getenv("DSAI_SW_DECODE_CAPACITY", os.getenv("RTSP_HARD_LIMIT", "3"))))
+
+
+# RTSP capacity derived from actual per-node decode headroom (Issue #72, P2)
+RTSP_HARD_LIMIT = dsai_derive_node_capacity(DSAI_IS_HW_ACCELERATED)
+RTSP_SOFT_LIMIT = int(os.getenv("RTSP_SOFT_LIMIT", str(max(1, int(RTSP_HARD_LIMIT * 0.75)))))
+
+# Node draining state for graceful scale-down / preStop hooks (Issue #72)
+_dsai_is_draining = False
+DSAI_DRAINING = False
 
 # --- Graceful Shutdown Event (file jobs use this one implicitly via signal handling) ---
 shutdown_event = threading.Event()
@@ -69,6 +121,10 @@ _job_slots = threading.Semaphore(EXTRACTOR_THREADS)
 _active_rtsp_streams = {}
 # camera_id -> stream_id mapping for stopping streams by camera identifier
 _active_camera_streams = {}
+
+# Backward-compatibility and testing aliases
+RTSP_EXTRACTORS = _active_rtsp_streams
+RTSP_EXTRACTOR_THREADS = _active_rtsp_streams
 # RLock, not Lock: /extract_stream holds this while calling _rtsp_effective_limit(),
 # which itself acquires it via _rtsp_is_degraded() -- a plain Lock would deadlock
 # on that reentrant acquisition from the same thread.
@@ -95,8 +151,10 @@ def _rtsp_is_degraded() -> bool:
 
 
 def _rtsp_effective_limit() -> int:
-    """The ceiling currently in effect: throttled down to the soft limit
-    while degraded, otherwise the hard limit."""
+    """The ceiling currently in effect: 0 if draining, throttled down to the soft limit
+    while degraded, otherwise the node headroom capacity."""
+    if _dsai_is_draining:
+        return 0
     return RTSP_SOFT_LIMIT if _rtsp_is_degraded() else RTSP_HARD_LIMIT
 
 def ensure_bucket(minio_client, bucket_name):
@@ -158,15 +216,24 @@ def dsai_upload_frame_with_retry(
 ) -> bool:
     """
     Retry with backoff on extractor MinIO upload; route to DLQ on exhaustion (REL-55).
+    Guarded by MinIO circuit breaker (Issue #85, High 7).
     """
+    minio_breaker = dsai_get_circuit_breaker("minio")
+    is_avail, retry_after = minio_breaker.dsai_is_available()
+    if not is_avail:
+        print(f"[{EXTRACTOR_ID}] MinIO circuit breaker OPEN (retry in {retry_after}s), failing upload fast")
+        return False
+
     delay = initial_delay
     last_err = None
     for attempt in range(1, max_retries + 1):
         try:
             minio_client.fput_object(bucket_name, object_name, file_path)
+            minio_breaker.dsai_record_success()
             return True
         except Exception as e:
             last_err = e
+            minio_breaker.dsai_record_failure(e)
             if attempt < max_retries:
                 time.sleep(delay)
                 delay *= backoff
@@ -343,8 +410,8 @@ class GStreamerRtspExtractor:
         """Builds and starts the GStreamer pipeline and checks for shutdown."""
         ensure_bucket(self.minio_client, self.bucket_name)
         pipeline_desc = f"""
-            rtspsrc location={self.rtsp_url} latency=0 !
-            rtph264depay ! h264parse ! avdec_h264 !
+            rtspsrc location={self.rtsp_url} latency=100 drop-on-latency=true !
+            rtph264depay ! h264parse ! {DSAI_SELECTED_DECODER} !
             videoconvert ! videorate ! video/x-raw,framerate={EXTRACTION_FPS}/1 !
             jpegenc ! appsink name=sink emit-signals=true
         """
@@ -463,6 +530,10 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
                 client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=available")
             _job_slots.release()
 
+
+RTSPExtractor = GStreamerRtspExtractor
+
+
 def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threading.Event,
                             tenant_id: str = "default", camera_id: Optional[str] = None):
     """Background task to process a live RTSP stream. Runs alongside other
@@ -479,6 +550,9 @@ def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threadi
 
     backoff = 2
     max_backoff = 32
+    consecutive_failures = 0
+    max_consecutive_failures = int(os.getenv("DSAI_MAX_STREAM_FAILURES", "5"))
+
     try:
         while not stream_event.is_set():
             extractor = GStreamerRtspExtractor(
@@ -490,12 +564,35 @@ def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threadi
                 tenant_id=tenant_id,
                 camera_id=cid
             )
+            run_start = time.time()
             try:
                 extractor.start()
+                if (time.time() - run_start) > 30:
+                    consecutive_failures = 0
             except Exception as e:
-                print(f"[{EXTRACTOR_ID}] Error during RTSP extraction job: {e}")
+                consecutive_failures += 1
+                dsai_record_pull_error("rtsp_pipeline_error")
+                print(f"[{EXTRACTOR_ID}] Error during RTSP extraction job (failure {consecutive_failures}/{max_consecutive_failures}): {e}")
 
             if stream_event.is_set():
+                break
+
+            consecutive_failures += 1
+            if consecutive_failures >= max_consecutive_failures:
+                print(f"[{EXTRACTOR_ID}] Stream {rtsp_url} reached {consecutive_failures} consecutive failures. Marking stream failed and routing to DLQ.")
+                dsai_record_pull_error("stream_consecutive_failure_threshold_exceeded")
+                try:
+                    get_producer().publish("events:dlq", {
+                        "event_type": "stream.failed",
+                        "stream_id": stream_id,
+                        "camera_id": cid,
+                        "rtsp_url": rtsp_url,
+                        "tenant_id": tenant_id,
+                        "error": f"Stream failed after {consecutive_failures} consecutive attempts",
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                except Exception as dlq_err:
+                    print(f"[{EXTRACTOR_ID}] Failed to publish stream failure to DLQ: {dlq_err}")
                 break
 
             print(f"[{EXTRACTOR_ID}] RTSP stream disconnected for {rtsp_url}, retrying in {backoff}s...")
@@ -506,6 +603,7 @@ def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threadi
             _active_rtsp_streams.pop(stream_id, None)
             if cid in _active_camera_streams and _active_camera_streams[cid] == stream_id:
                 _active_camera_streams.pop(cid, None)
+            dsai_record_pull_stream_count(len(_active_rtsp_streams))
         print(f"[{EXTRACTOR_ID}] RTSP job for {rtsp_url} has concluded.")
 
 # --- FASTAPI APPLICATION SETUP ---
@@ -524,7 +622,7 @@ _heartbeat_thread = None
 
 
 def start_heartbeat_thread(interval: float = 30.0) -> threading.Thread:
-    """Starts a background daemon thread reporting heartbeats to central registry every 30s."""
+    """Starts a background daemon thread reporting heartbeats and capacity to central registry."""
     global _heartbeat_thread
     if _heartbeat_thread is not None and _heartbeat_thread.is_alive():
         return _heartbeat_thread
@@ -532,10 +630,19 @@ def start_heartbeat_thread(interval: float = 30.0) -> threading.Thread:
     def _loop():
         while not shutdown_event.is_set():
             try:
+                with _rtsp_lock:
+                    current_active = len(_active_rtsp_streams)
+                    effective_cap = _rtsp_effective_limit()
                 with httpx.Client(timeout=5.0) as client:
                     client.post(
                         f"{REGISTRY_URL}/heartbeat",
-                        params={"worker_id": EXTRACTOR_ID, "worker_type": "extractor"}
+                        params={
+                            "worker_id": EXTRACTOR_ID,
+                            "worker_type": "extractor",
+                            "capacity": effective_cap,
+                            "active_streams": current_active,
+                            "extractor_url": EXTRACTOR_URL
+                        }
                     )
             except Exception:
                 pass
@@ -549,8 +656,22 @@ def start_heartbeat_thread(interval: float = 30.0) -> threading.Thread:
 def on_startup():
     """Register the extractor with the central registry and start heartbeat thread on startup."""
     try:
+        dsai_validate_startup_config("extractor", fail_fast=False)
+    except Exception as e:
+        print(f"[{EXTRACTOR_ID}] Startup config validation warning: {e}")
+
+    try:
         with httpx.Client() as client:
-            client.post(f"{REGISTRY_URL}/register", json={"extractor_id": EXTRACTOR_ID, "extractor_url": EXTRACTOR_URL})
+            client.post(
+                f"{REGISTRY_URL}/register",
+                json={
+                    "extractor_id": EXTRACTOR_ID,
+                    "extractor_url": EXTRACTOR_URL,
+                    "capacity": RTSP_HARD_LIMIT,
+                    "decoder": DSAI_SELECTED_DECODER,
+                    "hw_accelerated": DSAI_IS_HW_ACCELERATED
+                }
+            )
     except Exception as e:
         print(f"[{EXTRACTOR_ID}] Failed to register with registry on startup: {e}")
     start_heartbeat_thread()
@@ -592,18 +713,22 @@ def extract(request: FileJobRequest, background_tasks: BackgroundTasks, http_req
 
 @app.post("/extract_stream")
 def extract_stream(request: RtspJobRequest, background_tasks: BackgroundTasks, http_request: Request = None):
-    """Endpoint to start a job for an RTSP stream. Rejected with 503 if this
-    extractor is already at its effective RTSP capacity (soft limit if
-    degraded, hard limit otherwise)."""
+    """Endpoint to start a job for an RTSP stream. Rejected with 503 with Retry-After if this
+    extractor is at effective capacity or in draining state (Issue #72)."""
     enforced_tenant = dsai_validate_extractor_tenant(http_request, request.tenant_id)
     with _rtsp_lock:
-        if len(_active_rtsp_streams) >= _rtsp_effective_limit():
-            raise HTTPException(status_code=503, detail="Extractor at RTSP stream capacity")
+        if _dsai_is_draining or DSAI_DRAINING or len(_active_rtsp_streams) >= _rtsp_effective_limit():
+            raise HTTPException(
+                status_code=503,
+                detail="Extractor at RTSP stream capacity or draining",
+                headers={"Retry-After": "30"}
+            )
         stream_id = f"{EXTRACTOR_ID}-rtsp-{uuid.uuid4().hex[:8]}"
         stream_event = threading.Event()
         _active_rtsp_streams[stream_id] = stream_event
         if request.camera_id:
             _active_camera_streams[request.camera_id] = stream_id
+        dsai_record_pull_stream_count(len(_active_rtsp_streams))
 
     background_tasks.add_task(
         run_rtsp_extraction_job,
@@ -614,6 +739,28 @@ def extract_stream(request: RtspJobRequest, background_tasks: BackgroundTasks, h
         request.camera_id
     )
     return {"message": "Job for RTSP stream started.", "stream_id": stream_id}
+
+
+@app.post("/drain")
+def dsai_drain(timeout_seconds: Optional[float] = None):
+    """
+    Graceful PreStop hook endpoint: stops accepting new streams (returning 503 Retry-After),
+    allowing existing streams to complete or reassign (Issue #72).
+    """
+    global _dsai_is_draining, DSAI_DRAINING
+    _dsai_is_draining = True
+    DSAI_DRAINING = True
+    with _rtsp_lock:
+        active_count = len(_active_rtsp_streams)
+        for stream_event in list(_active_rtsp_streams.values()):
+            if hasattr(stream_event, "set"):
+                stream_event.set()
+    return {
+        "status": "drained",
+        "extractor_id": EXTRACTOR_ID,
+        "active_streams": active_count,
+        "message": "Node draining initiated. New stream requests rejected with 503."
+    }
 
 @app.get("/rtsp_status")
 def rtsp_status():

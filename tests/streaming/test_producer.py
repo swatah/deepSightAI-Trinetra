@@ -94,7 +94,7 @@ class TestStreamProducer:
         producer = StreamProducer(redis_client=mock_client)
 
         with pytest.raises(TypeError):
-            producer.publish("stream", {"not": "a pydantic model"})
+            producer.publish("stream", "not a pydantic model or dict")
 
     def test_init_creates_redis_client_if_none_provided(self):
         """If no redis_client provided, StreamProducer should create one using create_redis_client."""
