@@ -349,6 +349,24 @@ class EdgeIngestService:
                         })
                         continue
 
+                    # Cross-check camera path assignment (E4, S2, Issue #82)
+                    try:
+                        from deepSightAI.Trinetra.Shared.Repositories.CameraRepository import CameraRepository
+                        dsai_cam_repo = CameraRepository(tenant_id=str(dsai_parsed.tenant_id))
+                        dsai_assigned_path = dsai_cam_repo.get_ingestion_path(dsai_parsed.camera_id)
+                        if dsai_assigned_path and dsai_assigned_path.strip().lower() == "pull":
+                            dsai_failure_count += 1
+                            dsai_record_push_error("path_mismatch")
+                            dsai_results.append({
+                                "index": dsai_idx,
+                                "status": "error",
+                                "reason": "path_mismatch",
+                                "detail": f"Camera '{dsai_parsed.camera_id}' is assigned to 'pull' path (Issue #82, S2). Push-path edge submission is forbidden."
+                            })
+                            continue
+                    except Exception as dsai_cam_err:
+                        logger.warning(f"Camera path check warning in batch for '{dsai_parsed.camera_id}': {dsai_cam_err}")
+
                 dsai_res = self.dsai_ingest_single_event(
                     dsai_event=dsai_parsed,
                     dsai_correlation_id=dsai_correlation_id
@@ -587,6 +605,21 @@ async def dsai_post_edge_embeddings_v1(
                 detail=f"Device '{dsai_dev_id}' is not authorized to submit embeddings for camera '{dsai_event.camera_id}'"
             )
 
+        # Cross-check camera path assignment (E4, S2, Issue #82)
+        try:
+            from deepSightAI.Trinetra.Shared.Repositories.CameraRepository import CameraRepository
+            dsai_cam_repo = CameraRepository(tenant_id=str(dsai_event.tenant_id))
+            dsai_assigned_path = dsai_cam_repo.get_ingestion_path(dsai_event.camera_id)
+            if dsai_assigned_path and dsai_assigned_path.strip().lower() == "pull":
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Camera '{dsai_event.camera_id}' is assigned to 'pull' path (Issue #82, S2). Push-path edge submission is forbidden."
+                )
+        except HTTPException:
+            raise
+        except Exception as dsai_cam_err:
+            logger.warning(f"Camera path verification warning for camera '{dsai_event.camera_id}': {dsai_cam_err}")
+
         return dsai_service.dsai_ingest_single_event(dsai_event, dsai_correlation_id=dsai_cid)
 
     raise HTTPException(status_code=400, detail="Invalid payload structure: expected object or array.")
@@ -687,13 +720,18 @@ def dsai_edge_heartbeat(
 def dsai_check_camera_liveness(
     tenant_id: str,
     camera_id: str,
+    request: Request,
     max_idle_seconds: int = 120,
-    edge_device: Any = Depends(dsai_require_edge_auth)
+    dsai_db: Session = Depends(get_db)
 ):
     """Check if push-path camera feed is active or stale (Issue #80, E7)."""
-    dsai_dev_tenant = getattr(edge_device, "tenant_id", None) or (edge_device.get("tenant_id") if isinstance(edge_device, dict) else None)
-    if dsai_dev_tenant is not None and str(dsai_dev_tenant) != str(tenant_id):
-        raise HTTPException(status_code=403, detail="Edge device tenant mismatch")
+    dsai_key = dsai_extract_edge_key(request)
+    if dsai_key:
+        dsai_device_id = request.headers.get("X-Device-ID")
+        dsai_device = dsai_verify_edge_device(dsai_db=dsai_db, dsai_api_key=dsai_key, dsai_device_id=dsai_device_id)
+        dsai_dev_tenant = getattr(dsai_device, "tenant_id", None) or (dsai_device.get("tenant_id") if isinstance(dsai_device, dict) else None)
+        if dsai_dev_tenant is not None and str(dsai_dev_tenant) != str(tenant_id):
+            raise HTTPException(status_code=403, detail="Edge device tenant mismatch")
 
     dsai_r = dsai_get_edge_service()._dsai_get_redis()
     dsai_live_key = f"push:liveness:{tenant_id}:{camera_id}"
