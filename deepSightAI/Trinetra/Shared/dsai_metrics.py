@@ -145,7 +145,7 @@ def _dsai_get_health_redis():
         if _dsai_health_redis_client is not None:
             return _dsai_health_redis_client
         try:
-            from deepSightAI.Trinetra.Shared.Streaming.Schema import create_redis_client
+            from deepSightAI.Trinetra.Shared.Streaming.RedisClient import create_redis_client
             _dsai_health_redis_client = create_redis_client()
             return _dsai_health_redis_client
         except Exception:
