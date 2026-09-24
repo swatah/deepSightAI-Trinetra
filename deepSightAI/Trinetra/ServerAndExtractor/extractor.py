@@ -122,9 +122,6 @@ _active_rtsp_streams = {}
 # camera_id -> stream_id mapping for stopping streams by camera identifier
 _active_camera_streams = {}
 
-# Backward-compatibility and testing aliases
-RTSP_EXTRACTORS = _active_rtsp_streams
-RTSP_EXTRACTOR_THREADS = _active_rtsp_streams
 # RLock, not Lock: /extract_stream holds this while calling _rtsp_effective_limit(),
 # which itself acquires it via _rtsp_is_degraded() -- a plain Lock would deadlock
 # on that reentrant acquisition from the same thread.
@@ -529,9 +526,6 @@ def run_file_extraction_job(video_uri: str, segment_id: int, start_time: float, 
             with httpx.Client() as client:
                 client.post(f"{REGISTRY_URL}/update_status?extractor_id={EXTRACTOR_ID}&status=available")
             _job_slots.release()
-
-
-RTSPExtractor = GStreamerRtspExtractor
 
 
 def run_rtsp_extraction_job(rtsp_url: str, stream_id: str, stream_event: threading.Event,

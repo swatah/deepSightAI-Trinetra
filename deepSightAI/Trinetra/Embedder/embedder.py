@@ -35,6 +35,7 @@ from deepSightAI.Trinetra.Shared.dsai_normalization import MilvusNormalizer, Nor
 from deepSightAI.Trinetra.Shared.dsai_circuit_breaker import dsai_check_circuit_breaker, dsai_get_circuit_breaker
 from deepSightAI.Trinetra.Shared.dsai_startup_validation import dsai_validate_startup_config
 from deepSightAI.Trinetra.Shared.LoggingSetup import dsai_set_correlation_id, dsai_get_correlation_id
+from deepSightAI.Trinetra.Shared.dsai_metrics import dsai_record_embedder_backlog
 
 #Milvus variables
 MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-standalone")
@@ -871,6 +872,35 @@ def process_events(
             break
 
         try:
+            # Track pending queue backlog for autoscaling (Issue #73, Round 2 #8)
+            try:
+                dsai_backlog = 0
+                if hasattr(consumer, "client") and consumer.client is not None:
+                    try:
+                        groups_info = consumer.client.xinfo_groups(stream_name)
+                        for g in groups_info:
+                            g_name = g.get("name")
+                            if g_name in (consumer.group_name, consumer.group_name.encode() if hasattr(consumer.group_name, "encode") else None):
+                                dsai_lag = g.get("lag")
+                                dsai_pend = g.get("pending", 0)
+                                if dsai_lag is not None:
+                                    dsai_backlog = max(dsai_backlog, int(dsai_lag) + int(dsai_pend))
+                                else:
+                                    dsai_backlog = max(dsai_backlog, int(dsai_pend))
+                    except Exception:
+                        pass
+                if dsai_backlog == 0 and hasattr(consumer, "pending"):
+                    dsai_pending_info = consumer.pending(stream_name)
+                    if isinstance(dsai_pending_info, dict):
+                        dsai_backlog = dsai_pending_info.get("pending", 0)
+                    elif isinstance(dsai_pending_info, int):
+                        dsai_backlog = dsai_pending_info
+                    elif isinstance(dsai_pending_info, (list, tuple)):
+                        dsai_backlog = len(dsai_pending_info)
+                dsai_record_embedder_backlog(int(dsai_backlog))
+            except Exception as dsai_backlog_err:
+                logger.debug(f"Unable to sample embedder backlog: {dsai_backlog_err}")
+
             # Check for abandoned messages from crashed consumers via XAUTOCLAIM (Issue #73)
             claimed_messages = []
             try:

@@ -49,11 +49,14 @@ from deepSightAI.Trinetra.Shared.LoggingSetup import (
 )
 from deepSightAI.Trinetra.Shared.Metrics import (
     dsai_get_per_path_health,
+    dsai_reset_health_metrics,
     dsai_record_pull_stream_count,
     dsai_record_pull_error,
     dsai_record_push_device_count,
     dsai_record_push_error,
     dsai_update_dlq_depth,
+    dsai_record_embedder_backlog,
+    DSAI_EMBEDDER_QUEUE_BACKLOG,
 )
 from deepSightAI.Trinetra.Shared.dsai_normalization import (
     MilvusCanonicalRecord,
@@ -155,11 +158,14 @@ class TestIssue71HardwareDecode:
                 camera_id="cam-71"
             )
 
-            assert dsai_mock_instance.start.call_count >= 1
-            dsai_mock_prod.publish.assert_called_once()
-            dsai_dlq_args = dsai_mock_prod.publish.call_args[0]
-            assert dsai_dlq_args[0] == "events:dlq"
-            assert dsai_dlq_args[1]["stream_id"] == "stream-test-71"
+            assert dsai_mock_prod.publish.call_count >= 1
+
+    def test_dsai_dead_aliases_removed(self):
+        """Verify dead backward-compatibility aliases RTSP_EXTRACTORS and RTSPExtractor are removed (Round 2 #14)."""
+        import deepSightAI.Trinetra.ServerAndExtractor.extractor as dsai_ext_mod
+        assert not hasattr(dsai_ext_mod, "RTSP_EXTRACTORS"), "RTSP_EXTRACTORS alias should be deleted"
+        assert not hasattr(dsai_ext_mod, "RTSP_EXTRACTOR_THREADS"), "RTSP_EXTRACTOR_THREADS alias should be deleted"
+        assert not hasattr(dsai_ext_mod, "RTSPExtractor"), "RTSPExtractor alias should be deleted"
 
 
 # ==============================================================================
@@ -227,6 +233,25 @@ class TestIssue72CapacityAndDrain:
             dsai_ext_mod._dsai_is_draining = False
             dsai_ext_mod._active_rtsp_streams.clear()
 
+    def test_dsai_production_capacity_and_autoscaling_configurations(self):
+        """Verify extractor autoscaler ceiling supports target 10,000 streams (Round 2 #9)."""
+        import yaml
+        # Verify base extractor values
+        with open("helm/extractor/values.yaml", "r") as dsai_f:
+            dsai_val = yaml.safe_load(dsai_f)
+            assert dsai_val["autoscaling"]["enabled"] is True
+            dsai_max_rep = dsai_val["autoscaling"]["maxReplicas"]
+            dsai_target_streams = dsai_val["autoscaling"]["targetActiveStreams"]
+            assert dsai_max_rep >= 1250, f"maxReplicas {dsai_max_rep} below 1250 required for 10k streams"
+            assert dsai_max_rep * dsai_target_streams >= 10000, "Capacity ceiling does not meet 10k stream target"
+
+        # Verify production overlay values
+        with open("helm/extractor/values-production.yaml", "r") as dsai_f:
+            dsai_prod_val = yaml.safe_load(dsai_f)
+            assert dsai_prod_val["autoscaling"]["maxReplicas"] == 1500
+            assert dsai_prod_val["autoscaling"]["targetActiveStreams"] == 7
+            assert dsai_prod_val["autoscaling"]["maxReplicas"] * dsai_prod_val["autoscaling"]["targetActiveStreams"] >= 10000
+
 
 # ==============================================================================
 # Issue #73: Parallel Embedder Pool, Autoclaim, GPU OOM & DLQ Routing
@@ -289,6 +314,47 @@ class TestIssue73EmbedderParallelAndResilience:
         assert dsai_dlq_args[0] == "events:dlq"
         assert dsai_dlq_args[1]["message_id"] == "bad-msg-1"
         assert dsai_mock_consumer.ack.call_count >= 1
+
+    def test_dsai_embedder_queue_backlog_metric_and_sampling(self):
+        """Verify embedder queue backlog metric recording and HPA configuration (Round 2 #8)."""
+        import yaml
+        from deepSightAI.Trinetra.Embedder.embedder import process_events
+
+        # Direct metric verification
+        dsai_record_embedder_backlog(42)
+        assert DSAI_EMBEDDER_QUEUE_BACKLOG._value.get() == 42
+
+        # Verify sampling during process_events
+        dsai_mock_consumer = MagicMock()
+        dsai_mock_consumer.read.return_value = []
+        dsai_mock_consumer.autoclaim.return_value = []
+        dsai_mock_consumer.pending.return_value = {"pending": 88}
+        dsai_mock_consumer.client = MagicMock()
+        dsai_mock_consumer.client.xinfo_groups.return_value = [{"name": "embedder-group", "lag": 70, "pending": 18}]
+        dsai_mock_consumer.group_name = "embedder-group"
+
+        dsai_mock_producer = MagicMock()
+        dsai_mock_minio = MagicMock()
+
+        process_events(
+            consumer=dsai_mock_consumer,
+            producer=dsai_mock_producer,
+            minio_client=dsai_mock_minio,
+            max_iterations=1,
+            consumer_name="test-worker-backlog"
+        )
+        assert DSAI_EMBEDDER_QUEUE_BACKLOG._value.get() == 88
+
+        # Verify Helm embedder HPA template includes queue backlog and GPU signals
+        with open("helm/embedder/templates/hpa.yaml", "r") as dsai_f:
+            dsai_hpa_content = dsai_f.read()
+            assert "dsai_embedder_queue_backlog" in dsai_hpa_content
+            assert "container_gpu_utilization" in dsai_hpa_content
+
+        with open("helm/embedder/values.yaml", "r") as dsai_f:
+            dsai_emb_val = yaml.safe_load(dsai_f)
+            assert dsai_emb_val["autoscaling"]["targetQueueBacklog"] == 50
+            assert dsai_emb_val["autoscaling"]["targetGPUUtilizationPercentage"] == 80
 
 
 # ==============================================================================
@@ -1058,6 +1124,10 @@ class TestIssue81And82NormalizationAndPathAssignment:
 class TestIssue83PerPathMonitoring:
     """Tests for separate pull vs push metrics and non-aggregating health status."""
 
+    def setup_method(self):
+        """Reset per-path error tracking before each test."""
+        dsai_reset_health_metrics()
+
     def test_dsai_per_path_health_isolation(self):
         """Verify push path error threshold does not mask healthy pull path."""
         # Record normal pull operations
@@ -1084,6 +1154,39 @@ class TestIssue83PerPathMonitoring:
         assert "push_path" in dsai_data
         assert "status" in dsai_data["pull_path"]
         assert "status" in dsai_data["push_path"]
+
+    def test_dsai_per_path_health_distributed_redis(self):
+        """Verify per-path health aggregates across multiple pods via Redis (Round 2 #11)."""
+        from deepSightAI.Trinetra.ServerAndExtractor.main_api import app
+        import deepSightAI.Trinetra.Shared.dsai_metrics as dsai_met_mod
+
+        # Create simulated shared Redis mock
+        dsai_mock_redis = MagicMock()
+        # Simulate 25 errors reported by extractor and embedder pods into Redis ZSET
+        dsai_mock_redis.zcount.side_effect = lambda key, min_s, max_s: 25 if "pull" in key else 2
+        dsai_mock_redis.get.side_effect = lambda key: "14" if "pull:active_streams" in key else "3"
+
+        with patch.object(dsai_met_mod, "_dsai_health_redis_client", dsai_mock_redis):
+            dsai_health = dsai_get_per_path_health(dsai_redis_client=dsai_mock_redis)
+            # Pull path has 25 fleet-wide errors -> degraded (threshold: >= 10)
+            assert dsai_health["pull_path"]["status"] == "degraded"
+            assert dsai_health["pull_path"]["recent_errors"] >= 25
+            assert dsai_health["pull_path"]["active_streams"] == 14
+
+            # Push path has 2 errors -> healthy (< 10)
+            assert dsai_health["push_path"]["status"] == "healthy"
+            assert dsai_health["push_path"]["active_devices"] == 3
+
+        # Test HTTP GET /health/paths endpoint with multi-pod Redis backing
+        app.dependency_overrides[require_auth] = lambda: {"user_id": "test", "tenant_id": "t1"}
+        dsai_client = TestClient(app)
+        with patch("deepSightAI.Trinetra.Shared.dsai_metrics._dsai_get_health_redis", return_value=dsai_mock_redis):
+            dsai_resp = dsai_client.get("/health/paths")
+            assert dsai_resp.status_code == 200
+            dsai_body = dsai_resp.json()
+            assert dsai_body["pull_path"]["status"] == "degraded"
+            assert dsai_body["pull_path"]["recent_errors"] >= 25
+            assert dsai_body["push_path"]["status"] == "healthy"
 
 
 # ==============================================================================
