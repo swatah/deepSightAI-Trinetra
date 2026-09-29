@@ -7,6 +7,7 @@ import sys
 import os
 from unittest.mock import patch, MagicMock
 import torch
+import numpy as np
 
 from SearchService.main import app
 
@@ -57,10 +58,11 @@ def test_search_result_model():
     assert result.score == 0.95
     assert "frame_path" not in SearchResult.model_fields
 
+@patch('SearchService.main.dsai_encode_text_query', return_value=np.zeros(512, dtype=np.float32))
 @patch('SearchService.main.model')
 @patch('SearchService.main.preprocess')
 @patch('SearchService.main.get_milvus_collection')
-def test_search_returns_results(mock_get_collection, mock_preprocess, mock_model):
+def test_search_returns_results(mock_get_collection, mock_preprocess, mock_model, mock_encode_text):
     """Test that search returns results in expected format."""
     # Setup environment variables for the test
     with patch.dict('os.environ', {

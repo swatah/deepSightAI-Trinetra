@@ -115,6 +115,26 @@ class StreamConsumer:
         else:
             return self.client.xpending(stream_name, self.group_name)
 
+    def dsai_delivery_count(self, dsai_stream_name: str, dsai_message_id: str) -> int:
+        """
+        Return how many times Redis has delivered this pending message to any consumer
+        in the group. The count lives in Redis, so it survives worker restarts and is
+        shared across consumers. Returns 0 if the message is not pending or on error.
+        """
+        try:
+            dsai_entries = self.client.xpending_range(
+                name=dsai_stream_name,
+                groupname=self.group_name,
+                min=dsai_message_id,
+                max=dsai_message_id,
+                count=1
+            )
+            if dsai_entries:
+                return int(dsai_entries[0].get("times_delivered", 0))
+        except Exception:
+            pass
+        return 0
+
     def claim(self, stream_name: str, message_id: str, new_consumer_id: str):
         """
         Claim a pending message from another consumer.
@@ -128,3 +148,52 @@ class StreamConsumer:
             List of (message_id, data) tuples for claimed messages
         """
         return self.client.xclaim(stream_name, self.group_name, new_consumer_id, message_id)
+
+    def autoclaim(self, stream_name: str, min_idle_time_ms: int = 60000, start_id: str = "0-0", count: int = 10):
+        """
+        Reclaim pending entries from crashed/idle consumers via XAUTOCLAIM (Issue #73).
+        Falls back to xpending_range + xclaim if XAUTOCLAIM is unavailable.
+        """
+        self.ensure_group(stream_name)
+        try:
+            result = self.client.xautoclaim(
+                name=stream_name,
+                groupname=self.group_name,
+                consumername=self.consumer_id,
+                min_idle_time=min_idle_time_ms,
+                start_id=start_id,
+                count=count
+            )
+            messages = []
+            if result and len(result) >= 2:
+                for item in result[1]:
+                    if isinstance(item, (tuple, list)) and len(item) == 2:
+                        msg_id, data = item
+                        messages.append(Message(stream=stream_name, msg_id=msg_id, data=data))
+            return messages
+        except Exception:
+            try:
+                pending_info = self.client.xpending_range(
+                    name=stream_name,
+                    groupname=self.group_name,
+                    min="-",
+                    max="+",
+                    count=count
+                )
+                messages = []
+                for p in pending_info:
+                    if p.get("idle", 0) >= min_idle_time_ms:
+                        msg_id = p["message_id"]
+                        claimed = self.client.xclaim(
+                            name=stream_name,
+                            groupname=self.group_name,
+                            consumername=self.consumer_id,
+                            min_idle_time=min_idle_time_ms,
+                            message_ids=[msg_id]
+                        )
+                        for cid, cdata in claimed:
+                            messages.append(Message(stream=stream_name, msg_id=cid, data=cdata))
+                return messages
+            except Exception:
+                return []
+

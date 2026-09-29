@@ -31,6 +31,11 @@ from deepSightAI.Trinetra.Shared.Streaming.Producer import StreamProducer
 from deepSightAI.Trinetra.Shared.Streaming.Schema import FrameReadyEvent
 from deepSightAI.Trinetra.Shared.Config import get as get_config
 from deepSightAI.Trinetra.Shared.Milvus import ensure_tenant_collection, connect_milvus_with_retry
+from deepSightAI.Trinetra.Shared.dsai_normalization import MilvusNormalizer, NormalizationError
+from deepSightAI.Trinetra.Shared.dsai_circuit_breaker import dsai_check_circuit_breaker, dsai_get_circuit_breaker
+from deepSightAI.Trinetra.Shared.dsai_startup_validation import dsai_validate_startup_config
+from deepSightAI.Trinetra.Shared.LoggingSetup import dsai_set_correlation_id, dsai_get_correlation_id
+from deepSightAI.Trinetra.Shared.dsai_metrics import dsai_record_embedder_backlog
 
 #Milvus variables
 MILVUS_HOST = os.getenv("MILVUS_HOST", "milvus-standalone")
@@ -213,13 +218,25 @@ def mark_rtsp_bucket_processed(minio_client: Minio, bucket_name: str):
 
 def _download_one(minio_client: Minio, bucket_name: str, frame_object: str):
     """Download a single frame object to a temp file; returns the local path or None on failure."""
+    minio_breaker = dsai_get_circuit_breaker("minio")
+    is_avail, retry_after = minio_breaker.dsai_is_available()
+    if not is_avail:
+        logger.warning(f"MinIO circuit breaker OPEN (retry in {retry_after}s), skipping download of {frame_object}")
+        return None
+
     try:
         tmp_file = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False)
         tmp_file.close()
         minio_client.fget_object(bucket_name, frame_object, tmp_file.name)
+        minio_breaker.dsai_record_success()
         return tmp_file.name
     except S3Error as e:
+        minio_breaker.dsai_record_failure(e)
         logger.error(f"Error downloading frame {frame_object} from {bucket_name}: {e}")
+        return None
+    except Exception as e:
+        minio_breaker.dsai_record_failure(e)
+        logger.error(f"Unexpected error downloading frame {frame_object} from {bucket_name}: {e}")
         return None
 
 
@@ -369,7 +386,10 @@ def delete_rtsp_frame_objects(minio_client: Minio, bucket_name: str, frame_objec
 #Normalize and encode images using OpenCLIP
 @torch.no_grad()
 def encode_images(paths: List[str]) -> torch.Tensor:
-    """Encode a list of image paths into a tensor of normalized CLIP features (N, D)."""
+    """
+    Encode a list of image paths into a tensor of normalized CLIP features (N, D).
+    Implements GPU OOM resilience with automatic sub-batch retry and CPU fallback (Issue #73).
+    """
     tensors: List[torch.Tensor] = []
 
     for p in paths:
@@ -389,30 +409,52 @@ def encode_images(paths: List[str]) -> torch.Tensor:
 
     batch = torch.stack(tensors, dim=0)
 
-    if USE_ONNX and onnx_session:
-        # ONNX inference path
-        logger.debug(f"Processing {batch.shape[0]} images with ONNX")
-        batch_np = batch.numpy()
-        onnx_inputs = {onnx_session.get_inputs()[0].name: batch_np}
-        onnx_output = onnx_session.run(None, onnx_inputs)[0]
-        
-        # Convert back to PyTorch tensor and normalize
-        feats = torch.from_numpy(onnx_output).float()
-        feats = feats / feats.norm(dim=-1, keepdim=True)
-        return feats
-    else:
-        # PyTorch inference path
-        logger.debug(f"Processing {batch.shape[0]} images with PyTorch")
-        batch = batch.to(device, non_blocking=True)
-        
-        if USE_AUTOCast:
-            with torch.autocast("cuda"):
-                feats = model.encode_image(batch)
+    def _run_inference(batch_tensor: torch.Tensor, use_cpu: bool = False) -> torch.Tensor:
+        if USE_ONNX and onnx_session:
+            batch_np = batch_tensor.numpy()
+            onnx_inputs = {onnx_session.get_inputs()[0].name: batch_np}
+            onnx_output = onnx_session.run(None, onnx_inputs)[0]
+            feats_res = torch.from_numpy(onnx_output).float()
+            return feats_res / feats_res.norm(dim=-1, keepdim=True)
         else:
-            feats = model.encode_image(batch)
+            eff_device = "cpu" if (use_cpu or model is None) else device
+            if model is None:
+                return torch.empty((batch_tensor.shape[0], EMBEDDING_DIM), dtype=torch.float32)
+            b = batch_tensor.to(eff_device, non_blocking=True)
+            if eff_device == "cuda" and USE_AUTOCast:
+                with torch.autocast("cuda"):
+                    feats_res = model.encode_image(b)
+            else:
+                feats_res = model.encode_image(b)
+            return (feats_res / feats_res.norm(dim=-1, keepdim=True)).float()
 
-    feats = feats / feats.norm(dim=-1, keepdim=True)
-    return feats.float()
+    try:
+        return _run_inference(batch, use_cpu=False)
+    except Exception as e:
+        err_msg = str(e).lower()
+        is_oom = False
+        if hasattr(torch.cuda, "OutOfMemoryError") and isinstance(e, torch.cuda.OutOfMemoryError):
+            is_oom = True
+        elif "out of memory" in err_msg or "cuda out of memory" in err_msg or "cuda oom" in err_msg or "cudamalloc" in err_msg or err_msg.startswith("oom") or " oom" in err_msg:
+            is_oom = True
+
+        if is_oom:
+            logger.warning(f"GPU OOM caught during batch inference ({e}). Attempting sub-batch retry and CPU fallback.")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            try:
+                sub_feats = []
+                half = max(1, batch.shape[0] // 2)
+                for idx in range(0, batch.shape[0], half):
+                    sub_b = batch[idx:idx + half]
+                    sub_feats.append(_run_inference(sub_b, use_cpu=False))
+                return torch.cat(sub_feats, dim=0)
+            except Exception as oom2:
+                logger.warning(f"Sub-batch inference also triggered OOM ({oom2}). Falling back to CPU for this batch.")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                return _run_inference(batch, use_cpu=True)
+        raise
 
 
 # Worker function: process a segment (video or RTSP)
@@ -424,7 +466,8 @@ def process_segment_frames(
     frame_objects: List[str],
     timestamps: Optional[List[float]] = None,
     tenant_id: str = "default",
-    camera_id: Optional[str] = None
+    camera_id: Optional[str] = None,
+    producer: Optional[StreamProducer] = None
 ):
     """Process frames from a video segment."""
     cid = camera_id or video_id
@@ -460,13 +503,27 @@ def process_segment_frames(
                 if not frame_exists(collection, video_id, frame_obj):
                     frame_idx = start_offset + i
                     ts = timestamps[frame_idx] if timestamps and frame_idx < len(timestamps) else 0.0
-                    buf_pk.append(uuid.uuid4().hex)
-                    buf_video_id.append(video_id)
-                    buf_camera_id.append(cid)
-                    buf_frame_path.append(frame_obj)
-                    buf_timestamp.append(float(ts))
-                    buf_embedding.append(vec)
-                    buf_tenant_id.append(tid)
+                    try:
+                        canon = MilvusNormalizer.dsai_normalize_pull(
+                            dsai_video_id=video_id,
+                            dsai_camera_id=cid,
+                            dsai_frame_path=frame_obj,
+                            dsai_timestamp=float(ts),
+                            dsai_embedding=vec,
+                            dsai_tenant_id=tid,
+                            dsai_correlation_id=dsai_get_correlation_id(),
+                            dsai_producer=producer,
+                        )
+                        buf_pk.append(canon.pk)
+                        buf_video_id.append(canon.video_id)
+                        buf_camera_id.append(canon.camera_id)
+                        buf_frame_path.append(canon.frame_path)
+                        buf_timestamp.append(canon.frame_timestamp)
+                        buf_embedding.append(canon.embedding)
+                        buf_tenant_id.append(canon.tenant_id)
+                    except NormalizationError as ne:
+                        logger.error(f"Frame normalization error for {frame_obj}, routed to DLQ: {ne}")
+                        continue
                 else:
                     logger.debug(f"Skipping duplicate frame: {video_id}/{frame_obj}")
 
@@ -477,6 +534,7 @@ def process_segment_frames(
             if len(buf_video_id) >= INSERT_BATCH_SIZE:
                 logger.info(f"Inserting batch of {len(buf_video_id)} vectors into Milvus...")
                 try:
+                    dsai_check_circuit_breaker("milvus")
                     schema_fields = getattr(collection.schema, "fields", [])
                     if len(schema_fields) in (3, 4):
                         collection.insert([
@@ -495,6 +553,7 @@ def process_segment_frames(
                             buf_tenant_id,
                         ])
                     collection.flush()
+                    dsai_get_circuit_breaker("milvus").dsai_record_success()
                     buf_pk.clear()
                     buf_video_id.clear()
                     buf_camera_id.clear()
@@ -503,6 +562,7 @@ def process_segment_frames(
                     buf_embedding.clear()
                     buf_tenant_id.clear()
                 except Exception as e:
+                    dsai_get_circuit_breaker("milvus").dsai_record_failure(e)
                     logger.error(f"Error inserting batch into Milvus: {e}")
                     raise
 
@@ -511,13 +571,16 @@ def process_segment_frames(
                 torch.cuda.empty_cache()
 
         except Exception as e:
+            # Propagate so the event is retried and, after the retry limit, routed to the DLQ.
+            # Swallowing here would let the caller ACK an event whose frames were never indexed.
             logger.error(f"Error processing frame batch in {segment_path}: {e}")
-            continue
+            raise
 
     # Insert any remaining vectors
     if buf_video_id:
         logger.info(f"Inserting final batch of {len(buf_video_id)} vectors into Milvus...")
         try:
+            dsai_check_circuit_breaker("milvus")
             schema_fields = getattr(collection.schema, "fields", [])
             if len(schema_fields) in (3, 4):
                 collection.insert([
@@ -536,9 +599,11 @@ def process_segment_frames(
                     buf_tenant_id,
                 ])
             collection.flush()
+            dsai_get_circuit_breaker("milvus").dsai_record_success()
         except Exception as e:
+            dsai_get_circuit_breaker("milvus").dsai_record_failure(e)
             logger.error(f"Error inserting final batch into Milvus: {e}")
-            return
+            raise
 
     # Mark segment as processed after successful insertion
     mark_segment_processed(minio_client, segment_path)
@@ -553,7 +618,8 @@ def process_rtsp_frames(
     frame_objects: List[str],
     timestamps: Optional[List[float]] = None,
     tenant_id: str = "default",
-    camera_id: Optional[str] = None
+    camera_id: Optional[str] = None,
+    producer: Optional[StreamProducer] = None
 ):
     """Process frames from an RTSP stream/bucket."""
     cid = camera_id or bucket_name.replace("frames-rtsp-", "")
@@ -590,13 +656,27 @@ def process_rtsp_frames(
                 if not frame_exists(collection, video_id, path_to_store):
                     frame_idx = start_offset + i
                     ts = timestamps[frame_idx] if timestamps and frame_idx < len(timestamps) else time.time()
-                    buf_pk.append(uuid.uuid4().hex)
-                    buf_video_id.append(video_id)
-                    buf_camera_id.append(cid)
-                    buf_frame_path.append(path_to_store)
-                    buf_timestamp.append(float(ts))
-                    buf_embedding.append(vec)
-                    buf_tenant_id.append(tid)
+                    try:
+                        canon = MilvusNormalizer.dsai_normalize_pull(
+                            dsai_video_id=video_id,
+                            dsai_camera_id=cid,
+                            dsai_frame_path=path_to_store,
+                            dsai_timestamp=float(ts),
+                            dsai_embedding=vec,
+                            dsai_tenant_id=tid,
+                            dsai_correlation_id=dsai_get_correlation_id(),
+                            dsai_producer=producer,
+                        )
+                        buf_pk.append(canon.pk)
+                        buf_video_id.append(canon.video_id)
+                        buf_camera_id.append(canon.camera_id)
+                        buf_frame_path.append(canon.frame_path)
+                        buf_timestamp.append(canon.frame_timestamp)
+                        buf_embedding.append(canon.embedding)
+                        buf_tenant_id.append(canon.tenant_id)
+                    except NormalizationError as ne:
+                        logger.error(f"Frame normalization error for {path_to_store}, routed to DLQ: {ne}")
+                        continue
                 else:
                     logger.debug(f"Skipping duplicate frame: {video_id}/{path_to_store}")
 
@@ -607,6 +687,7 @@ def process_rtsp_frames(
             if len(buf_video_id) >= INSERT_BATCH_SIZE:
                 logger.info(f"Inserting batch of {len(buf_video_id)} RTSP vectors into Milvus...")
                 try:
+                    dsai_check_circuit_breaker("milvus")
                     schema_fields = getattr(collection.schema, "fields", [])
                     if len(schema_fields) in (3, 4):
                         collection.insert([
@@ -625,6 +706,7 @@ def process_rtsp_frames(
                             buf_tenant_id,
                         ])
                     collection.flush()
+                    dsai_get_circuit_breaker("milvus").dsai_record_success()
                     buf_pk.clear()
                     buf_video_id.clear()
                     buf_camera_id.clear()
@@ -633,6 +715,7 @@ def process_rtsp_frames(
                     buf_embedding.clear()
                     buf_tenant_id.clear()
                 except Exception as e:
+                    dsai_get_circuit_breaker("milvus").dsai_record_failure(e)
                     logger.error(f"Error inserting RTSP batch into Milvus: {e}")
                     raise
 
@@ -641,13 +724,15 @@ def process_rtsp_frames(
                 torch.cuda.empty_cache()
 
         except Exception as e:
+            # Propagate so the event is retried and, after the retry limit, routed to the DLQ.
             logger.error(f"Error processing RTSP frame batch in {bucket_name}: {e}")
-            continue
+            raise
 
     # Insert any remaining vectors
     if buf_video_id:
         logger.info(f"Inserting final batch of {len(buf_video_id)} RTSP vectors into Milvus...")
         try:
+            dsai_check_circuit_breaker("milvus")
             schema_fields = getattr(collection.schema, "fields", [])
             if len(schema_fields) in (3, 4):
                 collection.insert([
@@ -666,9 +751,11 @@ def process_rtsp_frames(
                     buf_tenant_id,
                 ])
             collection.flush()
+            dsai_get_circuit_breaker("milvus").dsai_record_success()
         except Exception as e:
+            dsai_get_circuit_breaker("milvus").dsai_record_failure(e)
             logger.error(f"Error inserting final RTSP batch into Milvus: {e}")
-            return
+            raise
 
     # Mark RTSP bucket as processed after successful inserts
     if bucket_name.startswith("frames-rtsp-"):
@@ -742,19 +829,27 @@ def process_events(
     minio_client=None,
     stop_flag=None,
     max_iterations: Optional[int] = None,
+    consumer_name: Optional[str] = None,
 ):
     """
     Main event loop: consume FrameReadyEvent messages from Redis Stream.
     Implements bounded retries (REL-57) and DLQ routing before acknowledgment.
+    Supports multiple parallel consumers in embedder-group and autoclaim (Issue #73).
     """
+    # Fail-fast startup configuration validation (Issue #86, Moderate 12)
+    if consumer is None:
+        dsai_validate_startup_config("embedder")
+
     if minio_client is None:
         minio_client = get_minio_client()
+    
+    dsai_consumer_id = consumer_name or os.getenv("EMBEDDER_CONSUMER_NAME") or f"{EMBEDDER_ID}-{uuid.uuid4().hex[:6]}"
     
     # Create Redis Stream consumer if not provided
     if consumer is None:
         consumer = StreamConsumer(
             group_name="embedder-group",
-            consumer_id=EMBEDDER_ID,
+            consumer_id=dsai_consumer_id,
             redis_client=None  # will create via create_redis_client()
         )
 
@@ -772,7 +867,7 @@ def process_events(
         pass
     
     stream_name = os.getenv("FRAME_EVENTS_STREAM", "frames")
-    logger.info(f"Embedder event consumer started on {stream_name}, waiting for FrameReadyEvent messages...")
+    logger.info(f"Embedder event consumer '{dsai_consumer_id}' started on {stream_name}, waiting for FrameReadyEvent messages...")
     
     iteration = 0
     while True:
@@ -780,6 +875,46 @@ def process_events(
             break
 
         try:
+            # Track pending queue backlog for autoscaling (Issue #73, Round 2 #8)
+            try:
+                dsai_backlog = 0
+                if hasattr(consumer, "client") and consumer.client is not None:
+                    try:
+                        groups_info = consumer.client.xinfo_groups(stream_name)
+                        for g in groups_info:
+                            g_name = g.get("name")
+                            if g_name in (consumer.group_name, consumer.group_name.encode() if hasattr(consumer.group_name, "encode") else None):
+                                dsai_lag = g.get("lag")
+                                dsai_pend = g.get("pending", 0)
+                                if dsai_lag is not None:
+                                    dsai_backlog = max(dsai_backlog, int(dsai_lag) + int(dsai_pend))
+                                else:
+                                    dsai_backlog = max(dsai_backlog, int(dsai_pend))
+                    except Exception:
+                        pass
+                if dsai_backlog == 0 and hasattr(consumer, "pending"):
+                    dsai_pending_info = consumer.pending(stream_name)
+                    if isinstance(dsai_pending_info, dict):
+                        dsai_backlog = dsai_pending_info.get("pending", 0)
+                    elif isinstance(dsai_pending_info, int):
+                        dsai_backlog = dsai_pending_info
+                    elif isinstance(dsai_pending_info, (list, tuple)):
+                        dsai_backlog = len(dsai_pending_info)
+                dsai_record_embedder_backlog(int(dsai_backlog))
+            except Exception as dsai_backlog_err:
+                logger.debug(f"Unable to sample embedder backlog: {dsai_backlog_err}")
+
+            # Check for abandoned messages from crashed consumers via XAUTOCLAIM (Issue #73)
+            claimed_messages = []
+            try:
+                claimed_messages = consumer.autoclaim(
+                    stream_name=stream_name,
+                    min_idle_time_ms=60000,
+                    count=10
+                )
+            except Exception as claim_err:
+                logger.debug(f"Autoclaim pass encountered exception: {claim_err}")
+
             # Read events from Redis Stream (block up to 5s)
             messages = consumer.read(
                 stream_name=stream_name,
@@ -787,19 +922,24 @@ def process_events(
                 block_ms=5000
             )
             
-            if not messages:
+            all_messages = list(claimed_messages or []) + list(messages or [])
+            if not all_messages:
                 iteration += 1
                 if max_iterations and iteration >= max_iterations:
                     break
                 continue
             
-            for msg in messages:
+            for msg in all_messages:
                 try:
+                    # Propagate or generate correlation_id
+                    corr_id = msg.data.get("correlation_id") or uuid.uuid4().hex
+                    dsai_set_correlation_id(corr_id)
+
                     # Parse event
                     event = FrameReadyEvent.model_validate_json(msg.data["event"])
                     logger.info(
                         f"Processing event: {event.video_id} / segment {event.segment_id} "
-                        f"({len(event.frame_paths)} frames)"
+                        f"({len(event.frame_paths)} frames) [corr_id={corr_id}]"
                     )
 
                     tenant_id = getattr(event, "tenant_id", None) or "default"
@@ -813,7 +953,8 @@ def process_events(
                             event.bucket_name, event.frame_paths,
                             timestamps=timestamps,
                             tenant_id=tenant_id,
-                            camera_id=camera_id
+                            camera_id=camera_id,
+                            producer=producer
                         )
                     else:
                         segment_path = f"{event.video_id}/segment_{event.segment_id:04d}"
@@ -822,7 +963,8 @@ def process_events(
                             event.video_id, segment_path, event.frame_paths,
                             timestamps=timestamps,
                             tenant_id=tenant_id,
-                            camera_id=camera_id
+                            camera_id=camera_id,
+                            producer=producer
                         )
 
                     # Acknowledge message after successful processing
@@ -831,10 +973,18 @@ def process_events(
                     
                 except Exception as e:
                     message_retry_counts[msg.id] = message_retry_counts.get(msg.id, 0) + 1
-                    attempts = message_retry_counts[msg.id]
+                    # Redis tracks deliveries per message across all consumers and restarts;
+                    # the local count only covers this process, so take whichever is higher.
+                    dsai_redis_deliveries = 0
+                    if hasattr(consumer, "dsai_delivery_count"):
+                        dsai_count_val = consumer.dsai_delivery_count(stream_name, msg.id)
+                        if isinstance(dsai_count_val, int):
+                            dsai_redis_deliveries = dsai_count_val
+                    attempts = max(message_retry_counts[msg.id], dsai_redis_deliveries)
                     logger.error(f"Failed to process event {msg.id} (attempt {attempts}/{max_retries}): {e}")
                     if attempts >= max_retries:
                         logger.error(f"Event {msg.id} exceeded {max_retries} retries, routing to DLQ '{dlq_stream}'")
+                        dsai_dlq_ok = False
                         if producer is not None:
                             try:
                                 producer.publish(dlq_stream, {
@@ -843,10 +993,14 @@ def process_events(
                                     "event": msg.data.get("event"),
                                     "error": str(e),
                                 })
+                                dsai_dlq_ok = True
                             except Exception as dlq_e:
                                 logger.error(f"Failed publishing to DLQ: {dlq_e}")
-                        consumer.ack(stream_name, msg.id)
-                        message_retry_counts.pop(msg.id, None)
+                        # Only ACK once the event is safely in the DLQ; otherwise leave it
+                        # pending so it is reclaimed and retried rather than lost.
+                        if dsai_dlq_ok:
+                            consumer.ack(stream_name, msg.id)
+                            message_retry_counts.pop(msg.id, None)
                     continue
 
             iteration += 1
@@ -869,6 +1023,9 @@ dsai_process_events = process_events
 
 
 if __name__ == "__main__":
+    # Fail-fast startup configuration validation (Issue #86)
+    dsai_validate_startup_config("embedder")
+
     # Register with registry on startup
     register_with_registry()
     

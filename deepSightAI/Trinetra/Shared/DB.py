@@ -34,9 +34,11 @@ def dsai_create_tenant_engine(tenant_id: str) -> Engine:
         tenant_id = str(tenant_id)
     safe_tenant_id = "".join(c for c in tenant_id if c.isalnum() or c == "_")
 
+    dsai_base_url = os.getenv("DATABASE_URL", BASE_DATABASE_URL)
+
     # Build connection string with search_path option
     engine = create_engine(
-        BASE_DATABASE_URL,
+        dsai_base_url,
         pool_pre_ping=True,
         pool_recycle=300,
         echo=False,  # Set to True for SQL debugging

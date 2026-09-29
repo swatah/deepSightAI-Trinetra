@@ -3,9 +3,13 @@ Pytest configuration for tests under deepSightAI.Trinetra.
 Suppresses known benign warnings and registers deepSightAI package aliases.
 """
 
+import os
 import warnings
 import sys
 import importlib
+
+# Unit tests have no JWT key files; allow the development-only throwaway key pair.
+os.environ.setdefault("DSAI_ALLOW_EPHEMERAL_JWT_KEYS", "true")
 from importlib.abc import MetaPathFinder, Loader
 from importlib.machinery import ModuleSpec
 

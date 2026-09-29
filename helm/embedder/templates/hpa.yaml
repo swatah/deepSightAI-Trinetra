@@ -1,0 +1,45 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Chart.Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Chart.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Chart.Name }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+  # Primary autoscaling signal: Frame queue backlog / consumer lag (Issue #73, Round 2 #8)
+  - type: Pods
+    pods:
+      metric:
+        name: dsai_embedder_queue_backlog
+      target:
+        type: AverageValue
+        averageValue: {{ .Values.autoscaling.targetQueueBacklog | default 50 }}
+  {{- if .Values.autoscaling.targetGPUUtilizationPercentage }}
+  # Secondary autoscaling signal: GPU utilization (via NVIDIA DCGM / K8s custom metrics)
+  - type: Pods
+    pods:
+      metric:
+        name: container_gpu_utilization
+      target:
+        type: AverageValue
+        averageValue: "{{ .Values.autoscaling.targetGPUUtilizationPercentage }}"
+  {{- end }}
+  {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+  # Fallback signal: CPU utilization
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+  {{- end }}
+{{- end }}

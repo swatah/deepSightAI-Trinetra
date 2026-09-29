@@ -9,6 +9,8 @@ from deepSightAI.Trinetra.Shared.dsai_logging_setup import (
     setup_logging,
     get_logger,
     JsonFormatter,
+    dsai_set_correlation_id,
+    dsai_get_correlation_id,
 )
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "setup_logging",
     "get_logger",
     "JsonFormatter",
+    "dsai_set_correlation_id",
+    "dsai_get_correlation_id",
 ]

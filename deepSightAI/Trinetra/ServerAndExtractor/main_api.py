@@ -55,9 +55,14 @@ class RtspStopRequest(BaseModel):
     stream_id: Optional[str] = None
     tenant_id: str = "default"
 
-# --- AUTH DEPENDENCY ---
+# --- AUTH & SERVICE DEPENDENCIES ---
 from deepSightAI.Trinetra.Shared.Middleware import require_auth, RequestIDMiddleware
 from deepSightAI.Trinetra.Shared.ErrorHandlers import register_error_handlers
+from deepSightAI.Trinetra.Shared.Repositories.CameraRepository import CameraRepository
+from deepSightAI.Trinetra.Shared.dsai_circuit_breaker import dsai_check_circuit_breaker, dsai_get_circuit_breaker, CircuitBreakerOpenException
+from deepSightAI.Trinetra.Shared.dsai_startup_validation import dsai_validate_startup_config
+from deepSightAI.Trinetra.ServerAndExtractor.dsai_edge_ingest import dsai_edge_router
+
 AUTH_AVAILABLE = True
 
 # --- FASTAPI APP INITIALIZATION ---
@@ -67,6 +72,7 @@ app = FastAPI(
 )
 app.add_middleware(RequestIDMiddleware)
 register_error_handlers(app)
+app.include_router(dsai_edge_router)
 
 # --- HELPER FUNCTIONS ---
 def fetch_video_from_minio(object_key: str) -> str:
@@ -133,6 +139,7 @@ async def process_video(request: VideoSourceRequest, http_request: Request):
             try:
                 response = await client.get(f"{REGISTRY_URL}/get_available_extractor")
                 response.raise_for_status()
+                dsai_get_circuit_breaker("registry").dsai_record_success()
                 extractor_info = response.json()
                 extractor_url = f"{extractor_info['extractor_url']}/extract"
                 job_payload = {
@@ -146,7 +153,13 @@ async def process_video(request: VideoSourceRequest, http_request: Request):
                 task = client.post(extractor_url, json=job_payload)
                 tasks.append(task)
             except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500:
+                    dsai_get_circuit_breaker("registry").dsai_record_failure(e)
                 print(f"Could not get an available extractor: {e.response.text}")
+                break
+            except httpx.RequestError as e:
+                dsai_get_circuit_breaker("registry").dsai_record_failure(e)
+                print(f"Could not reach registry: {e}")
                 break
 
         if tasks:
@@ -156,58 +169,45 @@ async def process_video(request: VideoSourceRequest, http_request: Request):
 @app.post("/process_rtsp_stream")
 async def process_rtsp_stream(request: RtspSourceRequest, http_request: Request):
     enforced_tenant_id = dsai_validate_request_tenant(http_request, request.tenant_id)
-    # RTSP capacity is per-extractor and numeric (soft/hard limit, current
-    # used count), not the binary busy/available claim used for file jobs --
-    # one extractor can watch several camera feeds at once. So instead of
-    # /get_available_extractor's atomic claim, poll every registered
-    # extractor's own /rtsp_status and pick one with room.
-    #
-    # Extractor endpoints require the same auth this request came in with
-    # (they're behind require_auth too), so forward it -- without this every
-    # call below 401s whenever auth is actually enabled, since neither this
-    # nor any other extractor-dispatch call in this file has ever forwarded
-    # the caller's token.
+
+    # Cross-check camera path assignment (Issue #82, S2)
+    try:
+        camera_repo = CameraRepository(tenant_id=enforced_tenant_id)
+        assigned_path = camera_repo.get_ingestion_path(request.camera_id)
+        if assigned_path and assigned_path.strip().lower() == "push":
+            raise HTTPException(
+                status_code=403,
+                detail=f"Camera '{request.camera_id}' is assigned to 'push' path (Issue #82, S2). Central pull extraction is forbidden."
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[InputRouter] Camera path validation check warning: {e}")
+
+    # Check circuit breaker for registry (Issue #85)
+    dsai_check_circuit_breaker("registry")
+
     forward_headers = {}
     incoming_auth = http_request.headers.get("Authorization")
     if incoming_auth:
         forward_headers["Authorization"] = incoming_auth
 
     async with httpx.AsyncClient(timeout=10.0, headers=forward_headers) as client:
+        # O(log N) placement lookup from Redis sorted set in registry (Issue #74, P5)
         try:
-            services_response = await client.get(f"{REGISTRY_URL}/get_all_services")
-            services_response.raise_for_status()
-            extractors = services_response.json().get("extractors", [])
+            placement_response = await client.get(f"{REGISTRY_URL}/get_available_rtsp_extractor")
+            placement_response.raise_for_status()
+            best = placement_response.json()
+            dsai_get_circuit_breaker("registry").dsai_record_success()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                dsai_get_circuit_breaker("registry").dsai_record_failure(e)
+            if e.response.status_code == 503:
+                raise HTTPException(status_code=503, detail="All extractors are at RTSP stream capacity (Issue #74).")
+            raise HTTPException(status_code=e.response.status_code, detail=f"Registry error: {e.response.text}")
         except httpx.RequestError as e:
-            raise HTTPException(status_code=500, detail=f"Could not reach registry: {e}")
-
-        if not extractors:
-            raise HTTPException(status_code=503, detail="No extractors registered.")
-
-        async def get_status(extractor_info):
-            try:
-                resp = await client.get(f"{extractor_info['extractor_url']}/rtsp_status")
-                resp.raise_for_status()
-                return extractor_info, resp.json()
-            except httpx.HTTPError:
-                return extractor_info, None
-
-        results = await asyncio.gather(*(get_status(e) for e in extractors))
-
-        # Pick the extractor with the most spare RTSP capacity (fewest
-        # current_used relative to its effective limit), skipping any that
-        # didn't respond or are already at capacity.
-        best = None
-        best_spare = -1
-        for extractor_info, status in results:
-            if status is None:
-                continue
-            spare = status["effective_limit"] - status["current_used"]
-            if spare > 0 and spare > best_spare:
-                best = extractor_info
-                best_spare = spare
-
-        if best is None:
-            raise HTTPException(status_code=503, detail="All extractors are at RTSP capacity.")
+            dsai_get_circuit_breaker("registry").dsai_record_failure(e)
+            raise HTTPException(status_code=503, detail=f"Could not reach registry: {e}")
 
         try:
             dispatch_response = await client.post(
@@ -219,14 +219,37 @@ async def process_rtsp_stream(request: RtspSourceRequest, http_request: Request)
                 }
             )
             dispatch_response.raise_for_status()
+            dispatch_data = dispatch_response.json()
+            stream_id = dispatch_data.get("stream_id", f"rtsp-{request.camera_id}")
+
+            # Record stream assignment in registry for bounded failover tracking (Issue #75, P6)
+            try:
+                await client.post(
+                    f"{REGISTRY_URL}/assign_stream",
+                    json={
+                        "stream_id": stream_id,
+                        "camera_id": request.camera_id,
+                        "extractor_id": best.get("extractor_id", "unknown"),
+                        "rtsp_url": request.rtsp_url,
+                        "tenant_id": enforced_tenant_id
+                    }
+                )
+                dsai_get_circuit_breaker("registry").dsai_record_success()
+            except Exception as assign_err:
+                dsai_get_circuit_breaker("registry").dsai_record_failure(assign_err)
+                print(f"[InputRouter] Warning: failed to record stream assignment: {assign_err}")
+
             return {
                 "message": "Stream monitoring job dispatched successfully",
-                "dispatched_to": best
+                "dispatched_to": best,
+                "stream_id": stream_id
             }
-        except httpx.HTTPStatusError:
-            raise HTTPException(status_code=503, detail="Chosen extractor rejected the stream (capacity changed).")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 503:
+                raise HTTPException(status_code=503, detail="Chosen extractor rejected the stream (capacity changed).")
+            raise HTTPException(status_code=e.response.status_code, detail=f"Extractor error: {e.response.text}")
         except httpx.RequestError as e:
-            raise HTTPException(status_code=500, detail=f"Could not connect to a service: {e}")
+            raise HTTPException(status_code=500, detail=f"Could not connect to extractor: {e}")
 
 
 # --- PHASE 0 BACKEND BRIDGES (T0.1.0 / ISSUE #17) ---
@@ -289,8 +312,14 @@ async def dsai_stop_rtsp_stream(request: RtspStopRequest, http_request: Request)
         try:
             services_response = await client.get(f"{REGISTRY_URL}/get_all_services")
             services_response.raise_for_status()
+            dsai_get_circuit_breaker("registry").dsai_record_success()
             extractors = services_response.json().get("extractors", [])
+        except httpx.HTTPStatusError as dsai_err:
+            if dsai_err.response.status_code >= 500:
+                dsai_get_circuit_breaker("registry").dsai_record_failure(dsai_err)
+            raise HTTPException(status_code=dsai_err.response.status_code, detail=f"Registry error: {dsai_err.response.text}")
         except httpx.RequestError as dsai_err:
+            dsai_get_circuit_breaker("registry").dsai_record_failure(dsai_err)
             raise HTTPException(status_code=500, detail=f"Could not reach registry: {dsai_err}")
 
         if not extractors:
@@ -377,8 +406,10 @@ async def get_system_status():
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{REGISTRY_URL}/get_all_services")
             response.raise_for_status()
+            dsai_get_circuit_breaker("registry").dsai_record_success()
             return response.json()
     except Exception as e:
+        dsai_get_circuit_breaker("registry").dsai_record_failure(e)
         raise HTTPException(status_code=500, detail=f"Could not fetch system status: {e}")
 
 # --- ADMIN REPLAY ENDPOINT (T2.2.9) ---
@@ -447,3 +478,10 @@ async def dsai_ready():
     if not is_ready:
         raise HTTPException(status_code=503, detail={"status": "not_ready", "checks": checks})
     return {"status": "ready", "service": "ServerAndExtractor.main_api", "checks": checks}
+
+
+@app.get("/health/paths")
+def dsai_get_paths_health():
+    """Independent health check for pull and push ingestion paths (Issue #83, Moderate 11)."""
+    from deepSightAI.Trinetra.Shared.dsai_metrics import dsai_get_per_path_health
+    return dsai_get_per_path_health()

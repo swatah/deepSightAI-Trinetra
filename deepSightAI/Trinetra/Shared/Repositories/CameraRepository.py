@@ -30,6 +30,7 @@ class Camera(Base):
     rtsp_url = Column(String(1024), nullable=True)
     location = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    ingestion_path = Column(String(10), default="pull", nullable=False)  # 'pull' or 'push' (S2, Issue #82)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -45,15 +46,21 @@ class CameraRepository(BaseRepository[Camera]):
         name: str,
         rtsp_url: Optional[str] = None,
         location: Optional[str] = None,
-        is_active: bool = True
+        is_active: bool = True,
+        ingestion_path: str = "pull"
     ) -> Camera:
-        """Register a new camera."""
+        """Register a new camera with explicit pull|push ingestion path."""
+        clean_path = (ingestion_path or "pull").strip().lower()
+        if clean_path not in ("pull", "push"):
+            raise ValueError(f"Invalid ingestion_path '{ingestion_path}'. Must be 'pull' or 'push'.")
+
         camera = Camera(
             id=camera_id,
             name=name,
             rtsp_url=rtsp_url,
             location=location,
-            is_active=is_active
+            is_active=is_active,
+            ingestion_path=clean_path
         )
         return self._add(camera)
 
@@ -77,3 +84,36 @@ class CameraRepository(BaseRepository[Camera]):
                 session.refresh(camera)
                 return camera
         return None
+
+    def update_ingestion_path(
+        self,
+        camera_id: str,
+        new_path: str,
+        drain_callback: Optional[callable] = None
+    ) -> Optional[Camera]:
+        """
+        Safely update camera's assigned ingestion path.
+        Drains old path before committing new path (Issue #82, S2).
+        """
+        clean_path = (new_path or "").strip().lower()
+        if clean_path not in ("pull", "push"):
+            raise ValueError(f"Invalid ingestion_path '{new_path}'. Must be 'pull' or 'push'.")
+
+        with self.Session() as session:
+            camera = session.query(Camera).get(camera_id)
+            if not camera:
+                return None
+
+            old_path = camera.ingestion_path
+            if old_path != clean_path:
+                if drain_callback is not None:
+                    drain_callback(camera_id, old_path)
+                camera.ingestion_path = clean_path
+                session.commit()
+                session.refresh(camera)
+            return camera
+
+    def get_ingestion_path(self, camera_id: str) -> Optional[str]:
+        """Return the assigned ingestion path ('pull' or 'push') for a camera."""
+        camera = self.get(camera_id)
+        return camera.ingestion_path if camera else None

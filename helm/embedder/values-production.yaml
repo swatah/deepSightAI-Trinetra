@@ -1,8 +1,8 @@
-replicaCount: 2
+replicaCount: 10
 
 image:
   repository: deepSightAI-Trinetra/embedder
-  tag: latest
+  tag: v3.0.0
   pullPolicy: IfNotPresent
 
 config:
@@ -29,13 +29,13 @@ service:
 
 autoscaling:
   enabled: true
-  minReplicas: 2
-  maxReplicas: 20
-  # Target queue backlog (pending un-embedded frames) per embedder pod before scaling out (Issue #73, Round 2 #8)
+  minReplicas: 10
+  # Production scale: Sized for up to 10,000 active cameras (~10,000 fps with frame sampling)
+  # Each GPU worker processes ~40-50 fps batch throughput; 250 replicas provide full 10,000 fps peak capacity
+  maxReplicas: 250
+  # Scale when queue backlog exceeds 50 frames per replica
   targetQueueBacklog: 50
-  # Target GPU utilization percentage (via NVIDIA DCGM container_gpu_utilization)
+  # Scale when GPU utilization exceeds 80%
   targetGPUUtilizationPercentage: 80
-  # Fallback CPU utilization percentage
+  # Fallback CPU utilization
   targetCPUUtilizationPercentage: 80
-
-

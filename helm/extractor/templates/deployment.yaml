@@ -45,6 +45,10 @@ spec:
           value: {{ .Values.config.MINIO_URL | quote }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "curl -s -X POST http://localhost:{{ .Values.service.port }}/drain || true"]
         livenessProbe:
           httpGet:
             path: /health

@@ -48,6 +48,8 @@ markers = [
     "perf: Performance tests",
     "security: Security tests",
     "slow: Tests that take > 5s",
+    "ci_tier: Enterprise Ingestion V3 CI-tier integration tests (fast, container/mock compatible)",
+    "staging_tier: Enterprise Ingestion V3 Staging/load-tier tests (scale, 10k streams, soak)",
 ]
 norecursedirs = [
     "deepSightAI/Trinetra/UI",

@@ -1,8 +1,8 @@
-replicaCount: 2
+replicaCount: 10
 
 image:
   repository: deepSightAI-Trinetra/extractor
-  tag: latest
+  tag: v3.0.0
   pullPolicy: IfNotPresent
 
 config:
@@ -13,18 +13,16 @@ config:
 
 resources:
   requests:
-    memory: "512Mi"
-    cpu: "500m"
-  limits:
     memory: "1Gi"
     cpu: "1000m"
+  limits:
+    memory: "2Gi"
+    cpu: "2000m"
 
 autoscaling:
   enabled: true
-  minReplicas: 2
-  # Production 10,000 active RTSP streams target (Issues #71, #72, Round 2 #9):
-  # 10,000 active RTSP streams / ~7 streams per pod = ~1,428 pods.
-  # maxReplicas is set to 1500 to guarantee full ceiling headroom for 10,000 streams.
+  minReplicas: 10
+  # Production scale: 10,000 active RTSP streams / 7 streams per pod = ~1,428 pods ceiling
   maxReplicas: 1500
   targetActiveStreams: 7
 
