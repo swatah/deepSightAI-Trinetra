@@ -107,6 +107,9 @@ services:
       MILVUS_HOST: milvus
       MILVUS_PORT: "19530"
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-deepSightAI-Trinetra}
+      # Local dev only: no JWT key files are mounted here. Production must set
+      # JWT_PRIVATE_KEY_PATH / JWT_PUBLIC_KEY_PATH instead.
+      DSAI_ALLOW_EPHEMERAL_JWT_KEYS: "true"
     depends_on:
       registry:
         condition: service_healthy
@@ -240,6 +243,8 @@ services:
       - "8002:8002"
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/${POSTGRES_DB:-deepSightAI-Trinetra}
+      # Local dev only: see main-api above.
+      DSAI_ALLOW_EPHEMERAL_JWT_KEYS: "true"
     depends_on:
       postgres:
         condition: service_healthy

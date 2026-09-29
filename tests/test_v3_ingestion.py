@@ -135,7 +135,9 @@ class TestIssue71HardwareDecode:
         from deepSightAI.Trinetra.ServerAndExtractor.extractor import run_rtsp_extraction_job
         
         dsai_shutdown = MagicMock()
-        dsai_shutdown.is_set.side_effect = [False, False, True]
+        # Each reconnect attempt checks the stop signal twice (loop head + after start()).
+        # With DSAI_MAX_STREAM_FAILURES=2 the job must give up on the 2nd failure.
+        dsai_shutdown.is_set.side_effect = [False, False, False, False] + [True] * 10
 
         with patch("deepSightAI.Trinetra.ServerAndExtractor.extractor.GStreamerRtspExtractor") as dsai_mock_ext_cls, \
              patch("deepSightAI.Trinetra.ServerAndExtractor.extractor.time.sleep") as dsai_mock_sleep, \

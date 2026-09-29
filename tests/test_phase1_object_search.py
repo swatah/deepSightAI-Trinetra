@@ -865,6 +865,7 @@ class TestSR35toSR44SearchAPI:
         mock_coll.search.return_value = [[mock_hit]]
 
         with patch("deepSightAI.Trinetra.SearchService.main.get_milvus_collection", return_value=mock_coll), \
+             patch("deepSightAI.Trinetra.SearchService.main.dsai_encode_text_query", return_value=np.zeros(512, dtype=np.float32)), \
              patch("deepSightAI.Trinetra.SearchService.main.dsai_generate_presigned_url", return_value="http://minio/presigned.jpg"):
 
             payload = {
@@ -1008,7 +1009,8 @@ class TestSR35toSR44SearchAPI:
         mock_coll = MagicMock()
         mock_coll.search.return_value = []
 
-        with patch("deepSightAI.Trinetra.SearchService.main.get_milvus_collection", return_value=mock_coll):
+        with patch("deepSightAI.Trinetra.SearchService.main.get_milvus_collection", return_value=mock_coll), \
+             patch("deepSightAI.Trinetra.SearchService.main.dsai_encode_text_query", return_value=np.zeros(512, dtype=np.float32)):
             response = test_client.post("/search/text", json={"query_text": "nonexistent term"})
             assert response.status_code == 200
             assert response.json() == []

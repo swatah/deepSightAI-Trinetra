@@ -8,6 +8,7 @@ RUN: uvicorn auth_service:app --host 0.0.0.0 --port 8000
 """
 
 import os
+import logging
 import json
 import secrets
 import string
@@ -52,25 +53,55 @@ DATABASE_URL = os.getenv(
 ALGORITHM = "RS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-# Generate RSA key pair for development (in production, load from secure storage)
-def _generate_rsa_keys():
-    private_key = rsa.generate_private_key(
+def dsai_ephemeral_jwt_keys_allowed() -> bool:
+    """Development-only switch: allow a throwaway in-memory key pair when no key files are set."""
+    return os.getenv("DSAI_ALLOW_EPHEMERAL_JWT_KEYS", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
+def dsai_load_or_generate_rsa_keys():
+    """
+    Load the RSA key pair from JWT_PRIVATE_KEY_PATH / JWT_PUBLIC_KEY_PATH.
+
+    Fails at startup if the files are not configured. A per-process random key would make
+    every service (and every replica) sign/verify with a different key, so tokens would be
+    rejected everywhere else. Only when DSAI_ALLOW_EPHEMERAL_JWT_KEYS is on (local
+    development and unit tests) is a throwaway key pair generated instead.
+    """
+    dsai_priv_path = os.getenv("JWT_PRIVATE_KEY_PATH")
+    dsai_pub_path = os.getenv("JWT_PUBLIC_KEY_PATH")
+    if dsai_priv_path and os.path.exists(dsai_priv_path) and dsai_pub_path and os.path.exists(dsai_pub_path):
+        with open(dsai_priv_path, "rb") as dsai_f_priv, open(dsai_pub_path, "rb") as dsai_f_pub:
+            return dsai_f_priv.read(), dsai_f_pub.read()
+
+    if not dsai_ephemeral_jwt_keys_allowed():
+        raise RuntimeError(
+            "JWT key files not found. Set JWT_PRIVATE_KEY_PATH and JWT_PUBLIC_KEY_PATH to existing "
+            "PEM files (or DSAI_ALLOW_EPHEMERAL_JWT_KEYS=true for local development only)."
+        )
+    logging.getLogger(__name__).warning(
+        "DSAI_ALLOW_EPHEMERAL_JWT_KEYS is on: using a throwaway JWT key pair. Tokens will not "
+        "validate in other processes. Never use this in production."
+    )
+
+    dsai_private_key = rsa.generate_private_key(
         public_exponent=65537,
         key_size=2048,
     )
     # Serialize to PEM format for python-jose compatibility
-    private_pem = private_key.private_bytes(
+    dsai_private_pem = dsai_private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption()
     )
-    public_pem = private_key.public_key().public_bytes(
+    dsai_public_pem = dsai_private_key.public_key().public_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
-    return private_pem, public_pem
+    return dsai_private_pem, dsai_public_pem
 
-PRIVATE_KEY, PUBLIC_KEY = _generate_rsa_keys()
+
+_generate_rsa_keys = dsai_load_or_generate_rsa_keys
+PRIVATE_KEY, PUBLIC_KEY = dsai_load_or_generate_rsa_keys()
 
 # ============================================================================
 # OAuth2 Configuration (Social Login - optional)

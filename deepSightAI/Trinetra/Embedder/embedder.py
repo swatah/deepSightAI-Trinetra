@@ -571,8 +571,10 @@ def process_segment_frames(
                 torch.cuda.empty_cache()
 
         except Exception as e:
+            # Propagate so the event is retried and, after the retry limit, routed to the DLQ.
+            # Swallowing here would let the caller ACK an event whose frames were never indexed.
             logger.error(f"Error processing frame batch in {segment_path}: {e}")
-            continue
+            raise
 
     # Insert any remaining vectors
     if buf_video_id:
@@ -601,7 +603,7 @@ def process_segment_frames(
         except Exception as e:
             dsai_get_circuit_breaker("milvus").dsai_record_failure(e)
             logger.error(f"Error inserting final batch into Milvus: {e}")
-            return
+            raise
 
     # Mark segment as processed after successful insertion
     mark_segment_processed(minio_client, segment_path)
@@ -722,8 +724,9 @@ def process_rtsp_frames(
                 torch.cuda.empty_cache()
 
         except Exception as e:
+            # Propagate so the event is retried and, after the retry limit, routed to the DLQ.
             logger.error(f"Error processing RTSP frame batch in {bucket_name}: {e}")
-            continue
+            raise
 
     # Insert any remaining vectors
     if buf_video_id:
@@ -752,7 +755,7 @@ def process_rtsp_frames(
         except Exception as e:
             dsai_get_circuit_breaker("milvus").dsai_record_failure(e)
             logger.error(f"Error inserting final RTSP batch into Milvus: {e}")
-            return
+            raise
 
     # Mark RTSP bucket as processed after successful inserts
     if bucket_name.startswith("frames-rtsp-"):
@@ -919,7 +922,7 @@ def process_events(
                 block_ms=5000
             )
             
-            all_messages = (claimed_messages or []) + (messages or [])
+            all_messages = list(claimed_messages or []) + list(messages or [])
             if not all_messages:
                 iteration += 1
                 if max_iterations and iteration >= max_iterations:
@@ -970,10 +973,18 @@ def process_events(
                     
                 except Exception as e:
                     message_retry_counts[msg.id] = message_retry_counts.get(msg.id, 0) + 1
-                    attempts = message_retry_counts[msg.id]
+                    # Redis tracks deliveries per message across all consumers and restarts;
+                    # the local count only covers this process, so take whichever is higher.
+                    dsai_redis_deliveries = 0
+                    if hasattr(consumer, "dsai_delivery_count"):
+                        dsai_count_val = consumer.dsai_delivery_count(stream_name, msg.id)
+                        if isinstance(dsai_count_val, int):
+                            dsai_redis_deliveries = dsai_count_val
+                    attempts = max(message_retry_counts[msg.id], dsai_redis_deliveries)
                     logger.error(f"Failed to process event {msg.id} (attempt {attempts}/{max_retries}): {e}")
                     if attempts >= max_retries:
                         logger.error(f"Event {msg.id} exceeded {max_retries} retries, routing to DLQ '{dlq_stream}'")
+                        dsai_dlq_ok = False
                         if producer is not None:
                             try:
                                 producer.publish(dlq_stream, {
@@ -982,10 +993,14 @@ def process_events(
                                     "event": msg.data.get("event"),
                                     "error": str(e),
                                 })
+                                dsai_dlq_ok = True
                             except Exception as dlq_e:
                                 logger.error(f"Failed publishing to DLQ: {dlq_e}")
-                        consumer.ack(stream_name, msg.id)
-                        message_retry_counts.pop(msg.id, None)
+                        # Only ACK once the event is safely in the DLQ; otherwise leave it
+                        # pending so it is reclaimed and retried rather than lost.
+                        if dsai_dlq_ok:
+                            consumer.ack(stream_name, msg.id)
+                            message_retry_counts.pop(msg.id, None)
                     continue
 
             iteration += 1

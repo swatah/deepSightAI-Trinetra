@@ -105,7 +105,9 @@ try:
             logger.warning(f"ONNX loading failed, falling back: {onnx_e}")
             USE_ONNX = False
 
-    if not USE_ONNX or onnx_session is None:
+    # The ONNX export is image-only and is not used for text; text queries always need the
+    # PyTorch text tower, so load it even when the ONNX session loaded.
+    if model is None:
         local_pytorch_model = "models/open_clip_pytorch_model.bin"
         if os.path.exists(local_pytorch_model):
             model, _, preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained=local_pytorch_model)
@@ -268,6 +270,29 @@ def get_milvus_collection(tenant_id: str = "default") -> Collection:
     )
 
 
+def dsai_raise_search_unavailable(dsai_endpoint: str):
+    """Report a search backend failure as 503 so callers never mistake it for zero matches."""
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"Search backend unavailable for {dsai_endpoint}"
+    )
+
+
+def dsai_quote_filter_value(dsai_value: str) -> str:
+    """
+    Wrap a user-supplied value as a Milvus string literal. Values containing quotes,
+    backslashes or control characters are rejected so they cannot change the filter's
+    meaning (e.g. close the string and add extra conditions).
+    """
+    dsai_text = str(dsai_value)
+    if any(dsai_ch in dsai_text for dsai_ch in ('"', "\\")) or any(ord(dsai_ch) < 32 for dsai_ch in dsai_text):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Filter values may not contain quotes, backslashes or control characters"
+        )
+    return f'"{dsai_text}"'
+
+
 def dsai_build_scalar_expr(
     camera_ids: Optional[List[str]] = None,
     time_start: Optional[float] = None,
@@ -280,20 +305,20 @@ def dsai_build_scalar_expr(
     """Construct Milvus scalar filter expression."""
     expr_parts = []
     if camera_ids:
-        cams = ", ".join(f'"{c}"' for c in camera_ids)
+        cams = ", ".join(dsai_quote_filter_value(c) for c in camera_ids)
         expr_parts.append(f"camera_id in [{cams}]")
     if time_start is not None:
         expr_parts.append(f"frame_timestamp >= {float(time_start)}")
     if time_end is not None:
         expr_parts.append(f"frame_timestamp <= {float(time_end)}")
     if color:
-        expr_parts.append(f'color == "{color.lower()}"')
+        expr_parts.append(f'color == {dsai_quote_filter_value(color.lower())}')
     if vehicle_type:
-        expr_parts.append(f'vehicle_type == "{vehicle_type.lower()}"')
+        expr_parts.append(f'vehicle_type == {dsai_quote_filter_value(vehicle_type.lower())}')
     if has_plate_read is not None:
         expr_parts.append(f'has_plate_read == {str(has_plate_read).lower()}')
     if plate_number:
-        expr_parts.append(f'plate_number == "{plate_number.upper()}"')
+        expr_parts.append(f'plate_number == {dsai_quote_filter_value(plate_number.upper())}')
     return " and ".join(expr_parts) if expr_parts else None
 
 
@@ -305,32 +330,44 @@ def dsai_encode_text_query(query_text: str) -> np.ndarray:
             text_features = model.encode_text(text)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
             return text_features.cpu().numpy().flatten()
-    # Deterministic synthetic fallback
-    rng = np.random.RandomState(abs(hash(query_text)) % 10000)
-    vec = rng.randn(EMBEDDING_DIM).astype(np.float32)
-    return vec / (np.linalg.norm(vec) + 1e-6)
+    # No model loaded: refuse rather than search with a made-up vector, which would
+    # return arbitrary frames that look like real matches.
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Text embedding model not loaded"
+    )
 
 
 def dsai_encode_image_base64(image_base64: str, target_dim: int = 256) -> np.ndarray:
-    """Decode base64 image and extract feature vector."""
+    """
+    Decode base64 image and extract feature vector.
+    Never substitutes a random vector: an unreadable image is a client error (422) and a
+    missing model is a service error (503), so a failed encode can't look like real matches.
+    """
     try:
-        image_data = base64.b64decode(image_base64.split(",")[-1])
+        image_data = base64.b64decode(image_base64.split(",")[-1], validate=True)
         pil_img = Image.open(io.BytesIO(image_data)).convert("RGB")
-        if preprocess is not None and model is not None:
-            with torch.no_grad():
-                tensor = preprocess(pil_img).unsqueeze(0).to(device)
-                feat = model.encode_image(tensor)
-                feat = feat / feat.norm(dim=-1, keepdim=True)
-                raw = feat.cpu().numpy().flatten()
-                if len(raw) != target_dim:
-                    raw = raw[:target_dim]
-                return raw
     except Exception as e:
-        logger.warning(f"Base64 image encoding fallback: {e}")
+        logger.warning(f"Reference image could not be decoded: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="reference_image_base64 is not a readable base64-encoded image"
+        )
 
-    rng = np.random.RandomState(len(image_base64) % 10000)
-    vec = rng.randn(target_dim).astype(np.float32)
-    return vec / (np.linalg.norm(vec) + 1e-6)
+    if preprocess is None or model is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Image embedding model not loaded"
+        )
+
+    with torch.no_grad():
+        tensor = preprocess(pil_img).unsqueeze(0).to(device)
+        feat = model.encode_image(tensor)
+        feat = feat / feat.norm(dim=-1, keepdim=True)
+        raw = feat.cpu().numpy().flatten()
+        if len(raw) != target_dim:
+            raw = raw[:target_dim]
+        return raw
 
 
 # --- API ENDPOINTS ---
@@ -499,10 +536,13 @@ async def search_text(
         dsai_record_query_latency("search_text", tenant_id, time.time() - dsai_start_time)
         return search_results
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Search error in /search/text: {e}")
-        # Standardize empty results on error / missing collection (SR-41)
-        return []
+        # A genuinely empty result is returned above as 200 [] (SR-41). A failure must not
+        # look like "no matches", so report it as a service error instead.
+        dsai_raise_search_unavailable("/search/text")
 
 
 @app.post("/search/vehicle", response_model=List[SearchResult])
@@ -597,9 +637,11 @@ async def search_vehicle(
         dsai_record_query_latency("search_vehicle", tenant_id, time.time() - dsai_start_time)
         return search_results
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Search error in /search/vehicle: {e}")
-        return []
+        dsai_raise_search_unavailable("/search/vehicle")
 
 
 @app.post("/search/person", response_model=List[SearchResult])
@@ -680,9 +722,11 @@ async def search_person(
         dsai_record_query_latency("search_person", tenant_id, time.time() - dsai_start_time)
         return search_results
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Search error in /search/person: {e}")
-        return []
+        dsai_raise_search_unavailable("/search/person")
 
 
 @app.post("/search/plate", response_model=List[SearchResult])
@@ -749,9 +793,11 @@ async def search_plate(
         dsai_record_query_latency("search_plate", tenant_id, time.time() - dsai_start_time)
         return search_results
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Search error in /search/plate: {e}")
-        return []
+        dsai_raise_search_unavailable("/search/plate")
 
 
 dsai_search_plate = search_plate

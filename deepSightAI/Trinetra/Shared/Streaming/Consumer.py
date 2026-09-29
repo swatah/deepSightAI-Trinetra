@@ -115,6 +115,26 @@ class StreamConsumer:
         else:
             return self.client.xpending(stream_name, self.group_name)
 
+    def dsai_delivery_count(self, dsai_stream_name: str, dsai_message_id: str) -> int:
+        """
+        Return how many times Redis has delivered this pending message to any consumer
+        in the group. The count lives in Redis, so it survives worker restarts and is
+        shared across consumers. Returns 0 if the message is not pending or on error.
+        """
+        try:
+            dsai_entries = self.client.xpending_range(
+                name=dsai_stream_name,
+                groupname=self.group_name,
+                min=dsai_message_id,
+                max=dsai_message_id,
+                count=1
+            )
+            if dsai_entries:
+                return int(dsai_entries[0].get("times_delivered", 0))
+        except Exception:
+            pass
+        return 0
+
     def claim(self, stream_name: str, message_id: str, new_consumer_id: str):
         """
         Claim a pending message from another consumer.

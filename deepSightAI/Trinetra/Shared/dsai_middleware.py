@@ -81,6 +81,7 @@ def dsai_require_auth(dsai_request: Request) -> Dict[str, Any]:
     if (
         dsai_request.url.path in DSAI_PROBE_PATHS
         or dsai_request.url.path.startswith("/v1/edge/")
+        or dsai_request.url.path.startswith("/v2/edge/")
         or dsai_request.url.path.startswith("/v0/edge/")
     ):
         return {}
